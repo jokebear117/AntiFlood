@@ -12,6 +12,8 @@ import numpy as np
 import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
+from rasterio.merge import merge
+from contextlib import ExitStack
 from rasterio.transform import from_origin
 from rasterio.warp import reproject, transform, transform_bounds
 import shapefile
@@ -75,18 +77,43 @@ def dataset_dir():
     return Path(os.getenv("ANTIFLOOD_DATASET", ROOT / "Dataset")).resolve()
 
 
-def load_grid(dataset):
-    raw_dem = dataset / "raw/dem/N37E127_FABDEM_V1-2.tif"
-    dem_path = raw_dem if raw_dem.exists() else dataset / "processed/fabdem_gangnam_1arcsec.tif"
+def dem_paths(dataset):
+    return sorted((dataset / "raw/dem").glob("N37E12[67]_FABDEM_V1-2.tif"))
+
+
+def read_elevation(dataset, destination, affine, crs):
+    """Merge only the requested window, so the longitude seam is interpolated together."""
+    paths = dem_paths(dataset)
+    if not paths:
+        raise ValueError("FABDEM 타일이 없습니다. 데이터 준비 명령을 실행해 주세요.")
+    height, width = destination.shape
+    bounds = transform_bounds(crs, "EPSG:4326", *rasterio.transform.array_bounds(height, width, affine))
+    pad = 2 / 3600
+    bounds = (bounds[0]-pad, bounds[1]-pad, bounds[2]+pad, bounds[3]+pad)
+    with ExitStack() as stack:
+        sources = [stack.enter_context(rasterio.open(path)) for path in paths]
+        mosaic, mosaic_affine = merge(sources, bounds=bounds, nodata=-9999)
+        reproject(
+            mosaic[0], destination, src_transform=mosaic_affine, src_crs=sources[0].crs,
+            src_nodata=-9999, dst_transform=affine, dst_crs=crs,
+            dst_nodata=np.nan, resampling=Resampling.bilinear,
+        )
+
+
+def load_grid(dataset, *, bounds=None, drain_mm_h=None, boundary=None, use_drain_raster=True):
     bounds_setting = os.getenv("ANTIFLOOD_BOUNDS")
-    if bounds_setting:
-        dem_path = raw_dem
-    bounds = tuple(map(float, bounds_setting.split(","))) if bounds_setting else DEFAULT_BOUNDS
+    if bounds is None:
+        bounds = tuple(map(float, bounds_setting.split(","))) if bounds_setting else DEFAULT_BOUNDS
+    bounds = tuple(bounds)
     if (
         len(bounds) != 4 or not all(np.isfinite(bounds))
-        or not (127 <= bounds[0] < bounds[2] <= 128 and 37 <= bounds[1] < bounds[3] <= 38)
+        or not (126.7 <= bounds[0] < bounds[2] <= 127.2 and 37.4 <= bounds[1] < bounds[3] <= 37.72)
     ):
-        raise ValueError("ANTIFLOOD_BOUNDS에 FABDEM 타일 안의 서·남·동·북 경위도를 입력해 주세요.")
+        raise ValueError("서울 주변 지원 범위(126.7–127.2°E, 37.4–37.72°N) 안에서 영역을 선택해 주세요.")
+    needed = {f"N37E{longitude}_FABDEM_V1-2.tif" for longitude in range(int(np.floor(bounds[0])), int(np.ceil(bounds[2])))}
+    missing = needed - {path.name for path in dem_paths(dataset)}
+    if missing:
+        raise ValueError("지형 데이터가 없는 영역입니다. 필요한 타일: " + ", ".join(sorted(missing)))
 
     west, south, east, north = transform_bounds("EPSG:4326", SEOUL_CRS, *bounds)
     width = int(np.ceil((east - west) / CELL_M))
@@ -94,19 +121,12 @@ def load_grid(dataset):
     if width * height > 1_000_000:
         raise ValueError("한 번에 100만 셀 이하가 되도록 계산 범위를 줄여 주세요.")
     affine = from_origin(west, north, CELL_M, CELL_M)
-    boundary_mode = os.getenv("ANTIFLOOD_BOUNDARY", "open")
+    boundary_mode = boundary if boundary is not None else os.getenv("ANTIFLOOD_BOUNDARY", "open")
     if boundary_mode not in ("open", "closed"):
         raise ValueError("외곽 설정은 open 또는 closed로 지정해 주세요.")
     padded_elevation = np.full((height + 2, width + 2), np.nan)
     padded_affine = affine * rasterio.Affine.translation(-1, -1)
-    with rasterio.open(dem_path) as source:
-        if not source.crs:
-            raise ValueError("DEM에 좌표계가 지정되어야 합니다.")
-        reproject(
-            rasterio.band(source, 1), padded_elevation,
-            dst_crs=SEOUL_CRS, dst_transform=padded_affine, dst_nodata=np.nan,
-            resampling=Resampling.bilinear,
-        )
+    read_elevation(dataset, padded_elevation, padded_affine, SEOUL_CRS)
 
     # A projected axis-aligned array may cover more than the WGS84 request.
     rows, cols = np.indices(padded_elevation.shape, dtype=np.float64)
@@ -120,6 +140,8 @@ def load_grid(dataset):
     valid = np.isfinite(elevation) & inside[1:-1, 1:-1]
     if not valid.any():
         raise ValueError("지정한 범위에 유효한 DEM 셀이 없습니다.")
+    if (inside[1:-1, 1:-1] & ~np.isfinite(elevation)).any():
+        raise ValueError("선택 영역에 DEM NoData가 있습니다. 범위를 줄여 주세요.")
     exterior = np.where(~inside, padded_elevation, np.nan)
     if boundary_mode == "closed":
         exterior[:] = np.nan
@@ -127,14 +149,14 @@ def load_grid(dataset):
         exterior[1:-1, 2:], exterior[:-2, 1:-1], exterior[1:-1, :-2], exterior[2:, 1:-1],
     ), axis=-1))
 
-    default_rate = float(os.getenv("ANTIFLOOD_DRAIN_MM_H", "5"))
+    default_rate = float(drain_mm_h if drain_mm_h is not None else os.getenv("ANTIFLOOD_DRAIN_MM_H", "5"))
     if not np.isfinite(default_rate) or default_rate < 0:
         raise ValueError("기본 배수율은 0 이상의 mm/h 값이어야 합니다.")
     rates = np.full_like(elevation, np.nan)
     raster_source = os.getenv("ANTIFLOOD_DRAIN_RASTER_SOURCE", "assumed")
     if raster_source not in ("observed", "assumed"):
         raise ValueError("배수율 출처는 observed 또는 assumed로 지정해 주세요.")
-    rate_path = os.getenv("ANTIFLOOD_DRAIN_RASTER")
+    rate_path = os.getenv("ANTIFLOOD_DRAIN_RASTER") if use_drain_raster else None
     if rate_path:
         with rasterio.open(rate_path) as source:
             if not source.crs:

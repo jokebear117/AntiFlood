@@ -15,6 +15,8 @@
 
 FABDEM은 건물과 수목 높이의 영향을 줄인 지표면 근사 자료다. 2023년 공개한 V1-2의 기반 자료는 Copernicus DEM 2021_1이며, 대체 자료를 쓴 일부 영역을 제외한 주 관측 기간은 2011~2015년이다. 강남 타일의 개별 관측일과 2022년 당시 지형 변화량은 확인하지 못했다. 이 해상도는 저지대와 대략적인 흐름을 살피는 데 쓸 수 있다. 도로 횡단 경사, 연석, 지하 진입부를 확인하려면 더 촘촘한 자료가 필요하다. [FABDEM 제작 논문](https://doi.org/10.1088/1748-9326/ac4d4f) · [Copernicus DEM 제품 설명](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM)
 
+서울 서부 영역을 위해 [N37E126_FABDEM_V1-2.tif](raw/dem/N37E126_FABDEM_V1-2.tif)도 같은 공식 묶음에서 추가 확보했다. 14,408,799 B, CRC `f4c0f290`, EPSG:4326의 3,600 × 3,600 Float32이며 NoData는 -9999다. 동부 타일과 동일한 해상도·수직 기준·이용 조건을 따른다. 실행 로더는 요청 범위에서 두 타일을 연결한 뒤 30m 투영 격자로 변환한다. 경도 127°를 가로지르는 영역에서 양쪽 셀을 NoData 없이 읽는 것을 확인했다. [공식 묶음](https://data.bris.ac.uk/datasets/s5hqmjcdj8yo2ibzi9b4ew3sn/N30E120-N40E130_FABDEM_V1-2.zip)
+
 ## 강우량과 관측소
 
 | 상태 | 원본 파일 | 기준 시점과 검증 |

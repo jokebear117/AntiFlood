@@ -34,6 +34,7 @@ class Replay:
         self.frame_wait = frame_wait
         self.condition = Condition()
         self.commands = Lock()
+        self.settings = None
         self.thread = None
         self._reset()
 
@@ -42,12 +43,16 @@ class Replay:
         self.run_id = self.scenario_id = self.simulated_time = self.error = None
         self.stop = self.pause_requested = False
         self.frames = []
+        self.progress = 0
+        self.prepared = False
 
     def state(self):
         with self.condition:
             latest = self.frames[-1] if self.frames else {}
             return {
                 "status": self.status,
+                "settings": self.settings,
+                "progress": getattr(self, "progress", 0),
                 "scenario_id": self.scenario_id,
                 "run_id": self.run_id,
                 "simulated_time_utc": self.simulated_time,
@@ -78,6 +83,7 @@ class Replay:
                     self.simulated_time = utc(scenario.intervals[0].start)
                     self.thread = Thread(target=self._worker, args=(scenario, self.run_id), daemon=True)
                     self.thread.start()
+                    self.condition.wait_for(lambda: self.prepared or self.status == "error")
                 elif operation == "pause":
                     if self.status != "running":
                         raise ReplayConflict("계산 중일 때 일시정지할 수 있습니다.")
@@ -117,8 +123,11 @@ class Replay:
             directory = self.output / run_id
             directory.mkdir(parents=True)
             np.save(directory / "valid.npy", self.grid.valid)
-            (directory / "run.json").write_text(json.dumps({
+            np.save(directory / "gauge_map.npy", self.gauge_map)
+            (directory / "run.tmp").write_text(json.dumps({
                 "scenario": scenario.summary(),
+                "settings": self.settings,
+                "status": "running",
                 "map": self.rasters.metadata(),
                 "gauges": [{"id": code, "name": name} for code, _, _, name in self.gauges],
                 "rainfall_distribution": "nearest_station; constant_within_observed_interval",
@@ -126,6 +135,10 @@ class Replay:
                 "manning": 0.04,
                 "threads_requested": self.threads,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
+            (directory / "run.tmp").replace(directory / "run.json")
+            with self.condition:
+                self.prepared = True
+                self.condition.notify_all()
             session = SimulationSession(
                 self.grid, self.tiles, self.engine, self.gauge_map, len(self.gauges),
                 scenario.intervals[0].start, self.threads,
@@ -141,6 +154,7 @@ class Replay:
                     ended = session.advance_step()
                     with self.condition:
                         self.simulated_time = utc(session.time)
+                        self.progress = (session.time - scenario.intervals[0].start).total_seconds() / (scenario.intervals[-1].end - scenario.intervals[0].start).total_seconds()
                     change = np.max(np.abs(session.depth - drawn_depth))
                     if strongest >= 5 or change >= 0.05:
                         cadence = 5
@@ -169,6 +183,7 @@ class Replay:
             with self.condition:
                 self.status = "completed"
                 self.condition.notify_all()
+            self._save_status(directory, "completed")
             LOG.info("Replay completed: %s", run_id)
         except Exception as exc:
             LOG.exception("Replay failed: %s", run_id)
@@ -181,6 +196,21 @@ class Replay:
                 else:
                     self.error = "계산이 중단되었습니다. 터미널 로그를 확인한 뒤 재생을 다시 시작해 주세요."
                 self.condition.notify_all()
+            if directory.exists():
+                self._save_status(directory, "error", self.error)
+        finally:
+            if self.stop and self.status not in ("completed", "error") and directory.exists():
+                self._save_status(directory, "stopped")
+
+    def _save_status(self, directory, status, error=None):
+        metadata = directory / "run.json"
+        if not metadata.exists():
+            return
+        data = json.loads(metadata.read_text(encoding="utf-8"))
+        data.update(status=status, error=error)
+        pending = directory / "run.tmp"
+        pending.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        pending.replace(metadata)
 
     def _publish(self, directory: Path, session):
         water, error = session.verify()

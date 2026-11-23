@@ -11,7 +11,7 @@ from rasterio.enums import Resampling
 from rasterio.transform import array_bounds, from_bounds
 from rasterio.warp import reproject, transform_bounds
 
-from .data import CELL_M, MAX_GAUGE_DISTANCE_M, SEOUL_CRS
+from .data import CELL_M, MAX_GAUGE_DISTANCE_M, SEOUL_CRS, read_elevation
 
 MERCATOR = "EPSG:3857"
 WORLD_EDGE = 20037508.342789244
@@ -43,8 +43,7 @@ class MapRasters:
         self.overlay_affine = from_bounds(*bounds, self.width * 2, self.height * 2)
         west, south, east, north = transform_bounds(MERCATOR, "EPSG:4326", *bounds)
         self.corners = [[west, north], [east, north], [east, south], [west, south]]
-        dem = dataset / "raw/dem/N37E127_FABDEM_V1-2.tif"
-        self.context_dem = dem if dem.is_file() else None
+        self.dataset = dataset
 
     def depth_png(self, depth):
         depth = np.where(self.grid.valid, depth.reshape(self.grid.valid.shape), -1)
@@ -62,19 +61,9 @@ class MapRasters:
         left = -WORLD_EDGE + x * tile_m
         top = WORLD_EDGE - y * tile_m
         affine = from_bounds(left, top - tile_m, left + tile_m, top, TILE_PIXELS, TILE_PIXELS)
-        elevation = np.zeros((TILE_PIXELS, TILE_PIXELS), dtype=np.float32)
-        if self.context_dem:
-            with rasterio.open(self.context_dem) as source:
-                reproject(
-                    rasterio.band(source, 1), elevation, dst_transform=affine, dst_crs=MERCATOR,
-                    dst_nodata=0, resampling=Resampling.bilinear,
-                )
-        reproject(
-            np.where(self.grid.valid, self.grid.elevation, np.nan), elevation,
-            src_transform=self.grid.affine, src_crs=SEOUL_CRS, src_nodata=np.nan,
-            dst_transform=affine, dst_crs=MERCATOR, init_dest_nodata=False,
-            dst_nodata=0, resampling=Resampling.bilinear,
-        )
+        elevation = np.full((TILE_PIXELS, TILE_PIXELS), np.nan, dtype=np.float32)
+        read_elevation(self.dataset, elevation, affine, MERCATOR)
+        elevation = np.nan_to_num(elevation, nan=0)
         code = np.rint((elevation + 32768) * 256).clip(0, 2**24 - 1).astype(np.uint32)
         return png(np.stack((code >> 16, code >> 8, code), axis=-1).astype(np.uint8))
 

@@ -44,7 +44,27 @@
     </section>
     <aside class="sidebar" aria-label="재생 설정과 수심">
       <section>
-        <h2>강우 재생</h2>
+        <h2>시뮬레이션 설정</h2>
+        <label for="area">계산 지역</label>
+        <select id="area">
+          <option value="gangnam">강남역 주변</option>
+          <option value="yeouido">여의도 주변</option>
+          <option value="mapo">마포 주변</option>
+          <option value="songpa">송파 주변</option>
+          <option value="custom">지도에서 직접 선택</option>
+        </select>
+        <div class="actions"><button id="select-area" type="button">영역 선택</button><button id="seoul" type="button">서울 보기</button></div>
+        <p>초록 점선은 지형 자료 범위예요. 강우 관측과 100만 셀 한도는 영역 선택 후 확인해요.</p>
+        <p id="region-info" role="status">계산 영역을 확인하는 중</p>
+        <details class="run-settings">
+          <summary>배수와 계산 조건</summary>
+          <div class="settings-grid">
+            <label>가정 배수율 (mm/h)<input id="drain" type="number" min="0" max="500" step="0.5" value="5"></label>
+            <label>CPU 스레드<input id="threads" type="number" min="1" max="64" step="1" value="4"></label>
+          </div>
+          <label for="boundary">외곽 경계</label>
+          <select id="boundary"><option value="open">유출 허용</option><option value="closed">닫힘</option></select>
+        </details>
         <label for="scenario">2022년 8월 서울시 10분 관측</label>
         <select id="scenario" disabled></select>
         <div class="actions">
@@ -52,6 +72,7 @@
           <button id="reset" type="button" disabled>초기화</button>
         </div>
         <p id="notice" class="notice" role="alert" hidden></p>
+        <progress id="progress" max="1" value="0" aria-label="계산 진행률"></progress><div id="progress-label"></div>
         <div class="clock-line"><span>계산 진행 시각</span><time id="computed-time">—</time></div>
       </section>
       <section>
@@ -61,11 +82,20 @@
           <div><span>최대 10분 강우</span><strong id="rain">—</strong></div>
         </div>
         <dl class="summary">
+          <div><dt>계산 셀</dt><dd id="cells">—</dd></div>
           <div><dt>활성 Tile</dt><dd id="tiles">—</dd></div>
           <div><dt>관측 시각 (KST)</dt><dd id="observed">—</dd></div>
           <div><dt>CPU 스레드</dt><dd id="workers">—</dd></div>
         </dl>
         <p id="point" class="point">지도에서 위치를 선택하면 셀 수심과 Tile 상태를 확인할 수 있어요.</p>
+      </section>
+      <section>
+        <h2>저장된 실행</h2>
+        <label for="history">실행 설정과 결과</label>
+        <select id="history"><option value="">기록 선택</option></select>
+        <div class="actions"><button id="open-run" type="button">결과 열기</button><button id="reuse" type="button" disabled>설정 재사용</button></div>
+        <button id="live" type="button" hidden>현재 실행으로 돌아가기</button>
+        <p id="history-info"></p>
       </section>
       <section class="context">
         <h2>계산 조건</h2>

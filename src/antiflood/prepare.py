@@ -60,13 +60,15 @@ def prepare_inputs(dataset):
     raw = dataset / "raw"
     save_if_missing(raw / "rainfall/rainfall_2022.zip", lambda: seoul_file("202214"), valid_zip)
     save_if_missing(raw / "rainfall/stations_epsg5181.zip", lambda: seoul_file("999998"), valid_zip)
-    dem = raw / "dem" / DEM_TILE
-    if not dem.exists():
-        with RemoteZip(BRISTOL_ARCHIVE, timeout=90) as archive:
-            member = archive.getinfo(DEM_TILE)
-            if member.CRC != 0xA0B509DB:
-                raise ValueError("FABDEM tile checksum differs from the documented V1-2 input.")
-            save_if_missing(dem, lambda: archive.open(member))
+    tiles = {DEM_TILE: 0xA0B509DB, "N37E126_FABDEM_V1-2.tif": 0xF4C0F290}
+    for name, crc in tiles.items():
+        dem = raw / "dem" / name
+        if not dem.exists():
+            with RemoteZip(BRISTOL_ARCHIVE, timeout=90) as archive:
+                member = archive.getinfo(name)
+                if member.CRC != crc:
+                    raise ValueError("FABDEM tile checksum differs from the documented V1-2 input.")
+                save_if_missing(dem, lambda: archive.open(member))
 
 
 def prepare_maplibre():
