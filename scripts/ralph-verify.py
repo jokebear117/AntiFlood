@@ -79,6 +79,8 @@ def main():
         latest = frames[-1]
         require(latest["rain_m3"] > 0 and latest["worker_count"] == 2 and latest["cumulative_cell_updates"] > 0,
                 "Real rainfall/native OpenMP work not observed")
+        require(latest["drain_m3"] > 0 and latest["boundary_outflow_m3"] == 0,
+                "Drainage or closed boundary result differs")
         # Inspect every generated depth grid, and the application's conservation check.
         for frame in frames:
             stem = frame["id"].rsplit("_", 1)[1]
@@ -100,6 +102,8 @@ def main():
                 request("/api/agent/query", {"question": "현재 상태"})
             except HTTPError as exc:
                 require(exc.code == 503, "Missing Solar key response differs")
+            else:
+                raise RuntimeError("Missing Solar key was not rejected")
         evidence = {"passed": [f"A{i}" for i in range(1, 8)], "run_id": run_id,
                     "bounds": settings["bounds"], "frames": len(frames), "last_frame": latest,
                     "point": point, "launcher_reused_pid": pid_before,

@@ -1,5 +1,7 @@
 # Ralph 실행 기록
 
+최신 상태는 STATE.md를 따른다. 라운드 1의 CLI 장애 이후 외부 담당 세션이 수행한 제품 확인은 문서 끝에 별도로 기록했다.
+
 ## 초기 구성 — 2026-11-24 KST
 
 - 요청 범위: 기존 제품 완료 확인과 최대 6회의 독립 CLI 반복 시스템 구성.
@@ -21,3 +23,14 @@
 - 상태: BLOCKED
 - 결과: 로컬 실행 환경 장애로 라운드 1을 진행하지 못했어. 파일을 읽지 못해 완료 여부를 판단하지 않았고, 소스와 STATE·HISTORY도 변경하지 않았어.
 - 검증: 실행 시도: exec_command는 프로세스 생성 단계에서 실패했고, 대체 Node 런타임도 초기화에 실패했어. 지침·GOAL·상태·소스·Git 이력 확인과 테스트는 미실행이야. 로컬 런타임 복구 후 시작 HEAD 36fa20efe6c067b328e67350b54ac84c74089a16 및 작업 트리 상태부터 확인해야 해.
+
+## 라운드 1 이후 외부 확인 — 2026-11-24 KST
+
+- 독립 CLI 세션: 01a209eb-5d9a-7d40-a4bb-ec6236af2858. 로그 머리에서 gpt-6.1-sol, reasoning effort medium, workspace-write, approval never 확인. 시작 구성 커밋 36fa20efe6c067b328e67350b54ac84c74089a16, BLOCKED 체크포인트 250e00ef23cca2708c5d1a2aa946bc662f2cec49. 둘 다 전용 원격 브랜치에 푸시했다.
+- 장애: 셸은 registered Core launch requires an installed app, Node는 app runtime provisioning service is unavailable; refusing helper fallback으로 실패했다. codex doctor 0.166.0은 elevated Windows sandbox provisioning 불완전/오래됨과 stale background server를 보고했다. 인증과 provider 접속은 정상이었다. 앱용 런타임 상속 문제 가능성이 있으나 확정하지 않았다. 시스템·보안 설정 변경과 동일 실패 재실행은 하지 않았다.
+- 외부 실행: `wsl -d AntiFlood-Probe -- sh -lc '~/.venvs/antiflood/bin/python scripts/ralph-verify.py'`, 종료 코드 0. 실행 ID 14b8b5156545467a91fa3bb22e701954. 경도 126.999–127.001°, 위도 37.499–37.501°, 가정 배수 2mm/h, 스레드 2, 닫힌 경계. 실제 연속 관측을 끝까지 계산해 프레임 104개를 남겼다.
+- 마지막 결과: 강우 14137.199999999979m³, 배수 1326.0563856496883m³, 외곽 유출 0m³, 잔류 수량 12811.143614350316m³, 수량 오차 2.546585164964199e-11m³. OpenMP 작업자 2명, 누적 셀 갱신 834792회. 생성된 모든 수심 배열의 유한값·비음수와 프레임별 수량 허용 오차를 검사했다.
+- 기능 확인: 일시정지·재개·초기화, 초기화 후 저장 기록·PNG·지점 수심, 같은 설정의 별도 실행 ID, 서부 지역 사전 확인, 잘못된 스레드 요청 422, Solar 키 미설정 503. launch.sh는 기존 서버 PID 864를 그대로 사용했다. 검증에서 만든 실행만 초기화했고 원본·이전 기록은 보존했다.
+- 결과 범위: A1–A7은 STATE의 코드·HTTP 실행 범위에서 충족. 새 브라우저 렌더링, Windows 브라우저 창 열기, 유료 Solar 응답, 실측 수심 정확도는 이번에 검증하지 않았다. 기존 제품 소스에는 변경이 없다. 전체 Ralph 상태는 CLI 도구 장애로 BLOCKED다.
+- 검증 스크립트에서 관측한 닫힌 경계 유출 0·양수 배수와 Solar 503 조건을 명시적으로 검사하도록 보강했다. 이미 확보한 결과와 대조했으며 전체 실데이터 실행은 반복하지 않았다.
+- 다음 행동: 사용자가 독립 CLI의 Windows 런타임을 복구한 뒤 현재 깨끗한 전용 브랜치에서 `python scripts/ralph-loop.py`를 실행할 수 있다. CLI 도구 실행이 계속 불가능하다면 추가 제품 변경 없이 중단한다. main 병합·배포는 수행하지 않았다.
