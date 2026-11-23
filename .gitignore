@@ -1,0 +1,24 @@
+# Local environment and Python-generated files
+/.env
+/.env.*
+!/.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/build/
+/dist/
+*.egg-info/
+
+# Keep source and processed datasets local.
+/Dataset/*
+!/Dataset/README.md
+
+# Track the output directories without tracking generated files.
+/outputs/*
+!/outputs/frames/
+!/outputs/logs/
+/outputs/frames/*
+/outputs/logs/*
+!/outputs/frames/.gitkeep
+!/outputs/logs/.gitkeep
