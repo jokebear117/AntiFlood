@@ -1,109 +1,56 @@
 # Anti-Flood
 
-**강우 스트림에 따라 서울의 침수 수심을 갱신하는 적응형 병렬 계산 시스템**
+Anti-Flood는 서울 강남역 주변 지형에 2022년 8월 서울시 강우 기록을 적용해 침수 수심이 변하는 과정을 보여 줍니다. 비가 오거나 물이 남아 있는 곳과 인접 구역을 골라 CPU 여러 코어로 계산하고, 결과를 같은 표고 자료로 만든 3D 지도에 겹쳐 표시합니다.
 
-Anti-Flood는 서울의 지형, 시간별 강우량, 지역별 배수 조건을 이용해 물이 어디에 얼마나 고이는지 계산하고 3D 지도에 보여주는 프로젝트입니다. 전체 지역을 매번 똑같이 계산하기보다, 비가 내리거나 물이 이동하는 영역에 계산 자원을 집중하는 것이 핵심입니다.
+## 실행
 
-> 현재 상태: 시스템 구조와 개발 명세를 확정한 단계입니다. 계산 엔진과 웹 화면은 구현 예정입니다.
+Windows에서는 WSL Ubuntu에서 아래 명령을 실행합니다. Python 3.11 이상, CMake 3.20 이상, OpenMP를 지원하는 C++ 컴파일러, WebGL 2를 지원하는 브라우저가 필요합니다. 이 작업 환경에서는 WSL Ubuntu와 Python 3.12를 검증했습니다.
 
-## 시스템 구조
+리포지토리 루트에서 실행합니다.
 
-```mermaid
-flowchart TD
-    A["Data Layer<br/>서울 DEM, 강우 기록, 배수 조건"]
-    B["Stream Processor<br/>강우 재생 및 최근 강우 상태 갱신"]
-    C["Flood Simulation Engine<br/>Tile 활성화, CA 수심 계산, CPU 병렬화"]
-    D["Visualization<br/>서울 3D 지도와 수심 레이어"]
-    E["Upstage Solar<br/>계산 상태 조회 및 설명"]
+```bash
+sudo apt update
+sudo apt install g++ cmake make python3 python3-venv ca-certificates
 
-    A --> B --> C --> D
-    C -. "읽기 전용 상태" .-> E
+python3 -m venv ~/.venvs/antiflood
+source ~/.venvs/antiflood/bin/activate
+python -m pip install -e .
+python -m antiflood.prepare
+
+cmake -S engine -B build/engine-linux -DCMAKE_BUILD_TYPE=Release
+cmake --build build/engine-linux
+python -m antiflood.api
 ```
 
-계산과 시각화는 분리합니다. 지도는 수심을 계산하지 않으며, 계산 엔진이 생성한 결과를 표시합니다.
+[http://127.0.0.1:8000](http://127.0.0.1:8000)을 열어 **시작**을 누릅니다. 기본 시나리오는 2022년 8월 8일 00:00부터 9일 07:10까지 한국시간입니다. 일시정지와 재개로 계산을 제어하고, 시간 슬라이더로 저장된 지도를 볼 수 있습니다. 지도에서 위치를 선택하면 그때의 셀 수심과 Tile 상태가 표시됩니다. **도로 지도**를 켜면 OpenStreetMap에 연결합니다.
 
-## 핵심 동작
+준비 명령은 서울시 강우와 관측소 위치, FABDEM의 대상 타일, MapLibre 배포 파일을 내려받습니다. 기존 파일이 있으면 재사용합니다. 초기 다운로드가 끝나면 지형, 재생, 수심 지도는 로컬에서 작동합니다. [입력 자료와 이용 조건](Dataset/README.md)
 
-1. **강우 입력:** 보유한 강우 기록을 관측 시각 순서대로 재생합니다. 최근 강우량은 Sliding Window와 지수 감쇠 요약으로 관리합니다.
-2. **계산 영역 선택:** 서울을 **100m × 100m Tile**로 관리합니다. 강우 발생, 기존 수심, 인접 지역에서의 물 유입 가능성을 기준으로 계산 대상을 활성화합니다.
-3. **수심 계산:** 기존 공개 **2D Cellular Automata(CA)** 침수 계산 코드를 재사용합니다. 지형 높이, 강우, 배수, 인접 격자 사이의 물 이동을 반영합니다.
-4. **병렬 처리:** 하나의 연속된 수심 상태를 노트북의 멀티코어 CPU에서 나누어 계산합니다. Tile 경계에서도 물의 흐름이 이어지도록 처리합니다.
-5. **결과 표시:** 계산한 수심을 서울 3D 지형 위에 겹쳐 표시하고, 강우 재생에 따른 변화를 확인합니다.
+### 실행 설정
 
-100m Tile은 **계산 대상을 관리하는 단위**입니다. 실제 물리 계산은 확보한 약 30m DEM 해상도를 기본으로 하며, Tile과 물리 격자는 구분합니다.
+기본값으로 실행할 때는 `.env`가 필요 없습니다. 설정을 바꾸려면 `.env.example`을 `.env`로 복사해 사용합니다. 경로는 서버를 실행하는 환경에서 접근할 수 있어야 합니다.
 
-## 리포지토리 구조
+| 환경 변수 | 동작 |
+| --- | --- |
+| `ANTIFLOOD_THREADS` | OpenMP 스레드 수입니다. 기본값은 4입니다. |
+| `ANTIFLOOD_BOUNDS` | 서·남·동·북 경위도를 쉼표로 구분합니다. 생략하면 강남역 주변의 동경 127.005–127.065°, 북위 37.470–37.535°를 사용합니다. 범위는 확보한 FABDEM 타일과 강우 관측소의 적용 범위에 들어야 합니다. |
+| `ANTIFLOOD_DRAIN_MM_H` | 유효 배수율 가정값입니다. 기본값은 5 mm/h입니다. |
+| `ANTIFLOOD_DRAIN_RASTER` | 지역별 유효 배수율을 담은 단일 밴드 GeoTIFF 경로입니다. 단위는 mm/h이며 CRS와 NoData를 지정합니다. NoData에는 기본값을 적용합니다. |
+| `ANTIFLOOD_DRAIN_RASTER_SOURCE` | 지역별 배수율의 출처를 `assumed`(기본값) 또는 `observed`로 표시합니다. |
+| `ANTIFLOOD_BOUNDARY` | 기본값 `open`은 바로 바깥의 지형이 있는 곳에서 유출을 허용합니다. `closed`는 외곽 유출을 막습니다. |
+| `ANTIFLOOD_DATASET`, `ANTIFLOOD_OUTPUT` | 입력과 결과 경로를 변경합니다. 기본값은 `Dataset/`, `outputs/`입니다. |
+| `ANTIFLOOD_PORT`, `ANTIFLOOD_FRAME_WAIT` | 로컬 포트(기본 8000)와 프레임 발행 후 화면 표시를 위한 대기 시간(기본 0.15초)을 바꿉니다. |
+| `UPSTAGE_API_KEY`, `UPSTAGE_MODEL` | 선택 기능입니다. 키를 설정하면 Solar가 최신 계산 상태와 지정 Tile을 조회해 한국어로 설명합니다. 기본 모델은 `solar-mini4`입니다. |
 
-```text
-Anti-Flood/
-├── README.md                  # 프로젝트 소개
-├── .gitignore                 # 데이터 및 생성 파일 제외 규칙
-├── .env.example               # Solar API 환경 변수 예시
-├── pyproject.toml             # Python 프로젝트 설정 (구현 단계에서 추가)
-│
-├── Dataset/                   # 실제 DEM, 강우, 배수 원본 데이터
-│   └── README.md              # 데이터 출처 및 구성 설명 (데이터에 맞춰 관리)
-│
-├── src/
-│   └── antiflood/             # Python 애플리케이션
-│       ├── data.py            # 지형, 강우, 배수 데이터 로딩 및 정렬
-│       ├── stream.py          # 강우 시계열 재생 및 스트림 요약
-│       ├── tiles.py           # 100m Tile 관리 및 활성화
-│       ├── simulation.py      # CA 엔진 호출 및 수심 상태 관리
-│       ├── api.py             # FastAPI 및 재생 제어
-│       └── agent.py           # Solar 읽기 전용 상태 설명
-│
-├── engine/                    # 공개 CA 엔진의 소스, 빌드 및 연동 부분
-├── web/                       # 지도 기반 사용자 화면
-│   ├── index.html
-│   ├── app.js
-│   └── style.css
-│
-├── outputs/                   # 실행 중 생성되는 프레임과 로그
-│   ├── frames/
-│   └── logs/
-│
-└── docs/                      # 프로젝트 설계 문서
-    ├── ARCHITECTURE.md
-    ├── DECISIONS.md
-    └── DEVELOPMENT_SPEC.html
-```
+## 계산 과정과 결과
 
-위 트리는 **확정된 목표 구조**입니다. 현재 없는 코드 파일은 해당 기능을 구현할 때 생성합니다. `Dataset/`에는 기존 데이터를 보존하고, 계산 결과는 `outputs/`에 따로 저장합니다.
+- FABDEM을 30 m 정사각형 격자(EPSG:5181)로 변환합니다. 셀 중심을 기준으로 100 m × 100 m Tile을 구성합니다.
+- 각 셀에 가장 가까운 서울시 관측소의 10분 우량을 적용합니다. 구간 안에서는 강우 강도를 일정하게 둡니다. 필요한 관측이 비어 있는 구간에서 시나리오를 나눕니다.
+- 강우와 가용 수량 내 배수를 반영한 뒤 [CADDIES WCA2Dv1 유출 커널](https://github.com/WaterDesk/caflood/blob/ef408ee3b6126fadd85cb7c3a2bc73adfc3d8011/Source/apps/caddies-flood/outflowWCA2Dv1.ca)을 실행합니다. 이전 수심을 이어 쓰고 Tile 경계의 같은 유량을 한 셀에서 빼고 이웃 셀에 더합니다.
+- 결과는 `outputs/frames/<실행 ID>/`에 저장됩니다. `run.json`에는 좌표계, 격자와 입력 설정이 있고, `valid.npy`는 계산 영역 마스크입니다. 각 프레임에 NumPy 수심 배열(m), 지도용 PNG, UTC 시각과 수량을 담은 JSON이 있습니다. 초기화 후에도 이전 실행 파일은 남습니다.
 
-| 디렉터리 | 역할 |
-|---|---|
-| `Dataset/` | 서울 DEM, 강우 관측 기록, 배수 자료와 출처 정보 |
-| `src/antiflood/` | 데이터 처리, 스트림, Tile 활성화, 계산 제어, API, 에이전트 |
-| `engine/` | 외부 공개 CA 계산 코드와 필요한 최소 연동 코드 |
-| `web/` | 3D 지도, 수심 레이어, 시뮬레이션 재생 제어 |
-| `outputs/` | 생성된 수심 프레임, 메타데이터, 로그 |
-| `docs/` | 확정 아키텍처, 의사결정, 개발 명세 |
+`src/antiflood/`는 데이터 처리, 강우 재생, Tile 선택, API를 담당합니다. `engine/`에는 OpenMP 계산 어댑터와 MIT 라이선스가 명시된 공개 커널을 두었습니다. `web/`은 MapLibre 지도와 재생 화면입니다. [시스템 아키텍처](docs/ARCHITECTURE.md) · [개발 명세](docs/DEVELOPMENT_SPEC.html) · [구현 결정과 검증](docs/DECISIONS.md)
 
-## 기술 구성
+## 계산 범위와 한계
 
-| 영역 | 기술 |
-|---|---|
-| 데이터 처리와 백엔드 | Python 3.11, NumPy, Rasterio, FastAPI |
-| 침수 계산 | 공개 CA 엔진 재사용, **CADDIES/CAFLOOD WCA2D 우선 검토** |
-| 병렬 실행 | CPU 기반 OpenMP 우선 |
-| 웹 인터페이스 | HTML, CSS, JavaScript, MapLibre GL JS |
-| 보조 에이전트 | Upstage Solar, 계산 상태 조회 전용 |
-
-CA 엔진은 아직 최종 채택하거나 연동한 상태가 아닙니다. 사용할 공개 코드의 라이선스와 연속 계산 및 활성 격자 제어 가능성을 확인한 뒤 `engine/`에 연결합니다. 별도의 멀티노드 클러스터나 GPU는 필수로 요구하지 않습니다.
-
-## 데이터와 실행
-
-이 프로젝트는 `Dataset/`에 준비된 **실제 서울 지형과 강우 자료**를 입력으로 사용합니다. 지역별 배수 자료가 충분하지 않으면 출처가 있는 값을 우선 사용하고, 부족한 부분에는 명시된 가정값을 적용합니다.
-
-현재는 구현 준비 단계이므로 실행 명령을 제공하지 않습니다. 데이터 로더, CA 엔진, 로컬 API가 연결되면 이 섹션에 실제로 작동하는 설치 및 실행 명령을 추가합니다.
-
-## 설계 문서
-
-- [시스템 아키텍처](docs/ARCHITECTURE.md)
-- [확정된 결정 사항](docs/DECISIONS.md)
-- [개발 명세서](docs/DEVELOPMENT_SPEC.html)
-
-## 범위
-
-Anti-Flood가 계산하는 값은 확보한 지형과 강우 및 배수 조건을 이용한 **근사 수심**입니다. 서울의 실제 침수 수심을 실시간으로 정확히 예측한다고 주장하지 않습니다. 프로젝트는 강우 스트림 처리, 적응형 격자 계산, CPU 병렬화, 3D 시각화에 집중합니다.
+기본 분석 범위는 강남역 주변입니다. 확보한 서울시 관로 자료는 수위와 시설 위치를 담고 있어 사건 당시 시간별 하수 배출량은 확인할 수 없습니다. 기본 배수율은 균일한 5 mm/h입니다. 계산 범위 바깥에서 들어오는 물과 실제 하수관망 흐름은 모의하지 않습니다. 외곽 유출은 인접 FABDEM 표고로 계산하며, 바깥 표고가 없으면 해당 경계를 닫아 둡니다. 30 m 지형은 연석이나 지하 진입부의 높이 차이를 표현하기 어렵습니다. 관측 수심과의 일치도는 검증하지 않았습니다.

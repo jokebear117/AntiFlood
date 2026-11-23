@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Anti-Flood | 서울 강우와 침수 수심</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/vendor/maplibre-gl.css">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Anti-Flood</h1>
+      <p>서울 강우·침수 재생</p>
+    </div>
+    <span id="status" class="status" data-status="loading" role="status">자료 불러오는 중</span>
+  </header>
+  <main class="layout">
+    <section class="map-column" aria-label="지형 지도와 시간 재생">
+      <div class="map-shell">
+        <div id="map" aria-label="서울 3D 지형 지도"></div>
+        <div id="map-error" class="map-message" role="alert" hidden></div>
+        <div class="map-controls">
+          <button id="fit" type="button" disabled>계산 범위</button>
+          <button id="pitch" type="button" aria-pressed="true" disabled>3D 지형</button>
+          <button id="streets" type="button" aria-pressed="false" disabled>도로 지도</button>
+        </div>
+        <div class="legend" hidden>
+          <strong>계산 수심 <span>(m)</span></strong>
+          <div id="legend"></div>
+          <span class="legend-note">1 mm 미만은 투명하게 표시</span>
+        </div>
+      </div>
+      <div class="timeline">
+        <div class="time-meta">
+          <div><span id="frame-label">지도 시각 (KST)</span><strong id="frame-time">—</strong></div>
+          <button id="latest" type="button" disabled>최신 결과</button>
+        </div>
+        <input id="timeline" type="range" min="0" max="0" value="0" aria-labelledby="frame-label" disabled>
+        <div class="time-endpoints"><span id="time-start">—</span><span id="time-end">—</span></div>
+      </div>
+    </section>
+    <aside class="sidebar" aria-label="재생 설정과 수심">
+      <section>
+        <h2>강우 재생</h2>
+        <label for="scenario">2022년 8월 서울시 10분 관측</label>
+        <select id="scenario" disabled></select>
+        <div class="actions">
+          <button id="primary" type="button" class="primary" disabled>시작</button>
+          <button id="reset" type="button" disabled>초기화</button>
+        </div>
+        <p id="notice" class="notice" role="alert" hidden></p>
+        <div class="clock-line"><span>계산 진행 시각</span><time id="computed-time">—</time></div>
+      </section>
+      <section>
+        <h2>지도 결과</h2>
+        <div class="measurements">
+          <div><span>최대 모의 수심</span><strong id="depth">—</strong></div>
+          <div><span>최대 10분 강우</span><strong id="rain">—</strong></div>
+        </div>
+        <dl class="summary">
+          <div><dt>활성 Tile</dt><dd id="tiles">—</dd></div>
+          <div><dt>관측 시각 (KST)</dt><dd id="observed">—</dd></div>
+          <div><dt>CPU 스레드</dt><dd id="workers">—</dd></div>
+        </dl>
+        <p id="point" class="point">지도에서 위치를 선택하면 셀 수심과 Tile 상태를 확인할 수 있어요.</p>
+      </section>
+      <section class="context">
+        <h2>계산 조건</h2>
+        <p id="assumptions">지형과 배수 설정을 확인하는 중</p>
+        <p id="scope"></p>
+      </section>
+      <details>
+        <summary>Solar에게 결과 묻기</summary>
+        <p id="agent-status">현재 결과와 Tile 상태를 조회할 수 있어요.</p>
+        <form id="agent-form">
+          <label for="question">질문</label>
+          <textarea id="question" maxlength="500" rows="2" placeholder="현재 최대 수심은 몇 m인가요?" disabled></textarea>
+          <button id="ask" type="submit" disabled>질문하기</button>
+        </form>
+        <p id="answer" role="status"></p>
+      </details>
+    </aside>
+  </main>
+</body>
+</html>
