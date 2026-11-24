@@ -1,12 +1,15 @@
 """Run the local API and serve the static MapLibre dashboard."""
 
 from contextlib import asynccontextmanager
+from functools import lru_cache
+import json
 import logging
 import os
 from pathlib import Path
 import re
 from typing import Annotated, Literal
 from threading import Lock
+from time import perf_counter
 from zipfile import BadZipFile
 
 from dotenv import load_dotenv
@@ -14,15 +17,19 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import httpx
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 import shapefile
+from rasterio import Affine
+from rasterio.warp import transform
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import uvicorn
 
-from . import agent, history
-from .data import ROOT, dataset_dir, load_gauges, load_grid, load_scenarios, DEFAULT_BOUNDS, dem_paths
-from .frames import MapRasters
-from .replay import Replay, ReplayConflict
+from . import agent, drainage, history, observed
+from .data import ROOT, SEOUL_CRS, dataset_dir, load_gauges, load_grid, load_scenarios, DEFAULT_BOUNDS, MAX_CELLS, dem_paths
+from .frames import MapRasters, array_png
+from .replay import Replay, ReplayConflict, gauge_list
 from .simulation import NativeEngine
 from .tiles import TileGrid
 
@@ -38,7 +45,7 @@ async def lifespan(app):
     app.state.frame_root = output / "frames"
     app.state.configuration_lock = Lock()
     app.state.dataset = dataset_dir()
-    app.state.replay = app.state.rasters = None
+    app.state.replay = app.state.rasters = app.state.preview_grid = None
     app.state.catalog = []
     errors = []
     engine = None
@@ -55,7 +62,8 @@ async def lifespan(app):
         app.state.rasters = MapRasters(grid, dataset)
         gauges, gauge_map = load_gauges(dataset, grid)
         app.state.catalog = load_scenarios(dataset, gauges)
-        app.state.gauges = [{"id": code, "name": name} for code, _, _, name in gauges]
+        app.state.gauges = gauge_list(gauges)
+        app.state.preview_grid = grid
         threads = int(os.getenv("ANTIFLOOD_THREADS", "4"))
         wait = float(os.getenv("ANTIFLOOD_FRAME_WAIT", "0.15"))
         if not 1 <= threads <= 64 or not 0 <= wait <= 10:
@@ -77,6 +85,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Anti-Flood", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=2048)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]", "testserver"])
 app.mount("/assets", StaticFiles(directory=WEB), name="assets")
 
@@ -126,7 +135,79 @@ def map_metadata():
         raise HTTPException(503, app.state.startup_error or "지형 자료를 읽을 수 없습니다.")
     return {**app.state.rasters.metadata(), "gauges": getattr(app.state, "gauges", []),
             "dem_bounds": [[126 if "E126" in path.name else 127,37,127 if "E126" in path.name else 128,38] for path in dem_paths(app.state.dataset)],
-            "selection_bounds": [126.7,37.4,127.2,37.72], "max_cells":1_000_000}
+            "selection_bounds": [126.7,37.4,127.2,37.72], "max_cells":MAX_CELLS}
+
+
+@app.get("/api/map/seoul")
+def seoul_boundary():
+    return observed.seoul_administrative_boundary()
+
+
+@app.get("/api/map/observed")
+def observed_flood():
+    try:
+        return observed.observed_geojson(app.state.dataset)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "서울시 침수흔적도 원본을 찾을 수 없습니다.") from exc
+    except (OSError, ValueError, BadZipFile, shapefile.ShapefileException) as exc:
+        raise HTTPException(422, "서울시 침수흔적도 원본을 읽지 못했습니다.") from exc
+
+
+@app.get("/api/map/pumps")
+def pump_stations():
+    try:
+        return drainage.pump_geojson(app.state.dataset)
+    except (OSError, ValueError, KeyError, BadZipFile, shapefile.ShapefileException) as exc:
+        raise HTTPException(404, "빗물펌프장 위치 자료를 읽지 못했습니다.") from exc
+
+
+def drainage_png(rate, source, valid, affine):
+    values = np.where(source == drainage.ASSUMED, -1, rate)
+    return Response(array_png(values, valid, affine, "drainage"), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/drainage/point")
+def drainage_point(
+    lon: Annotated[float, Query(ge=-180, le=180)],
+    lat: Annotated[float, Query(ge=-85, le=85)],
+    run: str | None = None,
+):
+    """Return the drainage rate the engine uses at a point and how it was derived."""
+    try:
+        if run:
+            directory = history.run_directory(app.state.frame_root, run)
+            info = json.loads((directory / "run.json").read_text(encoding="utf8"))
+            with np.load(directory / "drainage.npz") as arrays:
+                rate, source = arrays["rate"], arrays["source"]
+            affine = Affine(*info["map"]["grid_transform"])
+            valid = np.load(directory / "valid.npy", mmap_mode="r")
+        else:
+            grid = app.state.preview_grid
+            if grid is None or grid.drain_mm_h is None:
+                raise FileNotFoundError
+            rate, source, affine, valid = grid.drain_mm_h, grid.drain_class, grid.affine, grid.valid
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(404, "배수능력 자료가 없습니다.") from exc
+    x, y = transform("EPSG:4326", SEOUL_CRS, [lon], [lat])
+    col, row = (~affine) * (x[0], y[0])
+    row, col = int(np.floor(row)), int(np.floor(col))
+    if not (0 <= row < valid.shape[0] and 0 <= col < valid.shape[1] and valid[row, col]):
+        raise HTTPException(404, "선택한 위치는 계산 범위 밖입니다.")
+    value, kind = float(rate[row, col]), int(source[row, col])
+    return {
+        "drain_mm_h": round(value, 2),
+        "drain_source": drainage.CLASS_NAMES[kind],
+        "basis": drainage.explain(app.state.dataset, x[0], y[0], round(value, 2), kind),
+    }
+
+
+@app.get("/api/region/drainage.png")
+def region_drainage():
+    grid = app.state.preview_grid
+    if grid is None or grid.drain_mm_h is None:
+        raise HTTPException(404, "배수능력 자료가 없습니다.")
+    return drainage_png(grid.drain_mm_h, grid.drain_class, grid.valid, grid.affine)
 
 
 @app.get("/api/terrain/{zoom}/{x}/{y}.png")
@@ -148,15 +229,17 @@ class RunSettings(BaseModel):
     drain_mm_h: float = Field(default=5, ge=0, le=500, allow_inf_nan=False)
     threads: int = Field(default=4, ge=1, le=64)
     boundary: Literal["open", "closed"] = "open"
+    drainage: Literal["facility", "uniform"] = "facility"
 
 
 class StartRequest(RunSettings):
     scenario_id: str
+    mode: Literal["compare", "reference", "streaming"] = "compare"
 
 
 def prepare_region(settings):
     grid = load_grid(app.state.dataset, bounds=settings.bounds, drain_mm_h=settings.drain_mm_h,
-                     boundary=settings.boundary, use_drain_raster=False)
+                     boundary=settings.boundary, use_drain_raster=False, drainage=settings.drainage)
     gauges, mapping = load_gauges(app.state.dataset, grid)
     scenarios = load_scenarios(app.state.dataset, gauges)
     return grid, gauges, mapping, scenarios
@@ -166,9 +249,10 @@ def prepare_region(settings):
 def region(settings: RunSettings):
     try:
         grid, gauges, mapping, catalog = prepare_region(settings)
+        app.state.preview_grid = grid
         return {"map":MapRasters(grid, app.state.dataset).metadata(),
                 "scenarios":[item.summary() for item in catalog],
-                "gauges":[{"id":g[0],"name":g[3]} for g in gauges],
+                "gauges":gauge_list(gauges),
                 "estimated_memory_mb":round(grid.valid.size * 160 / 1_000_000),
                 "warning":"넓은 영역은 계산과 결과 저장에 더 오래 걸립니다." if grid.valid.size > 200_000 else None}
     except (ValueError, OSError, KeyError, StopIteration) as exc:
@@ -191,7 +275,8 @@ def start(body: StartRequest):
             replay = Replay(grid, TileGrid(grid), app.state.engine, mapping, gauges, catalog,
                             rasters, app.state.frame_root, body.threads,
                             float(os.getenv("ANTIFLOOD_FRAME_WAIT", "0.15")))
-            replay.settings = RunSettings(**body.model_dump(exclude={"scenario_id"})).model_dump(mode="json")
+            replay.settings = RunSettings(**body.model_dump(exclude={"scenario_id", "mode"})).model_dump(mode="json")
+            replay.mode = body.mode
             app.state.replay = replay
             return replay.command("start", body.scenario_id)
         except (ValueError, OSError, KeyError, StopIteration) as exc:
@@ -246,13 +331,37 @@ def frame_file(frame_id):
     raise HTTPException(404, "계산 결과를 찾을 수 없습니다.")
 
 
+@lru_cache(maxsize=12)
+def render_saved_frame(directory, stem, layer):
+    started = perf_counter()
+    metadata = json.loads((directory / "run.json").read_text(encoding="utf8"))
+    valid = np.load(directory / "valid.npy", mmap_mode="r")
+    if layer == "active":
+        with np.load(directory / f"{stem}.npz") as arrays:
+            tile_map = np.load(directory / "tile_map.npy", mmap_mode="r")
+            values = arrays["tile_modes"][tile_map]
+    else:
+        values = history.load_depth(directory, stem)
+        if layer == "difference":
+            reference = history.run_directory(directory.parent, metadata["reference_id"])
+            values = values - history.load_depth(reference, stem)
+    image = array_png(values, valid, Affine(*metadata["map"]["grid_transform"]), layer)
+    return image, perf_counter() - started
+
+
 @app.get("/api/frames/{frame_id}.png")
-def frame_image(frame_id: str):
+def frame_image(frame_id: str, layer: Literal["depth", "active", "difference"] = "depth"):
     directory, stem = frame_file(frame_id)
-    return FileResponse(
-        directory / f"{stem}.png", media_type="image/png",
-        headers={"Cache-Control": "private, max-age=86400, immutable"},
-    )
+    headers = {"Cache-Control": "private, max-age=86400, immutable"}
+    if layer == "depth" and (directory / f"{stem}.png").is_file():
+        return FileResponse(directory / f"{stem}.png", media_type="image/png", headers=headers)
+    frame = json.loads((directory / f"{stem}.json").read_text(encoding="utf8"))
+    if ((layer == "active" and frame.get("mode") != "streaming")
+            or (layer == "difference" and not frame.get("reference_frame_id"))):
+        raise HTTPException(404, "이 시각에 해당 지도 자료가 없습니다.")
+    image, seconds = render_saved_frame(directory, stem, layer)
+    headers["Server-Timing"] = f"map-render;dur={seconds * 1000:.3f}"
+    return Response(image, media_type="image/png", headers=headers)
 
 
 @app.get("/api/frames/{frame_id}/point")
@@ -278,7 +387,8 @@ def runs():
         try:
             info, frames = history.read_run(app.state.frame_root, path.parent.name)
             result.append({"id":path.parent.name, "scenario":info["scenario"], "settings":info.get("settings"),
-                           "map":info["map"], "status":info.get("status", "archived"), "frame_count":len(frames)})
+                           "map":info["map"], "status":info.get("status", "archived"), "frame_count":len(frames),
+                           "mode":info.get("mode"), "reference_id":info.get("reference_id")})
         except (ValueError, OSError, KeyError):
             continue
     return result
@@ -292,9 +402,43 @@ def saved_run(run_id: str):
         status = live.get("status") if live.get("run_id") == run_id else info.get("status", "archived")
         if status in ("running", "paused") and live.get("run_id") != run_id:
             status = "interrupted"
-        return {**info, "id":run_id, "status":status, "frames":frames}
+        reference_id = info.get("reference_id")
+        reference = None
+        if reference_id:
+            reference_dir = history.run_directory(app.state.frame_root, reference_id)
+            reference = json.loads((reference_dir / "run.json").read_text(encoding="utf8"))
+        return {**info, "id":run_id, "status":status, "frames":frames, "reference":reference}
     except (FileNotFoundError, ValueError, KeyError) as exc:
         raise HTTPException(404, "저장된 실행을 읽을 수 없습니다.") from exc
+
+
+@app.get("/api/runs/{run_id}/maximum.png")
+def maximum_image(run_id: str):
+    try:
+        directory = history.run_directory(app.state.frame_root, run_id)
+        info = json.loads((directory / "run.json").read_text(encoding="utf8"))
+        if info["status"] != "completed" or not (directory / "maximum.npz").is_file():
+            raise FileNotFoundError
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(404, "완료된 실행의 최대 수심 자료가 없습니다.") from exc
+    image, seconds = render_saved_frame(directory, "maximum", "depth")
+    return Response(image, media_type="image/png", headers={
+        "Cache-Control": "private, max-age=86400, immutable",
+        "Server-Timing": f"map-render;dur={seconds * 1000:.3f}",
+    })
+
+
+@app.get("/api/runs/{run_id}/drainage.png")
+def run_drainage(run_id: str):
+    try:
+        directory = history.run_directory(app.state.frame_root, run_id)
+        info = json.loads((directory / "run.json").read_text(encoding="utf8"))
+        with np.load(directory / "drainage.npz") as arrays:
+            rate, source = arrays["rate"], arrays["source"]
+        valid = np.load(directory / "valid.npy")
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(404, "이 실행에는 배수능력 지도가 저장되지 않았습니다.") from exc
+    return drainage_png(rate, source, valid, Affine(*info["map"]["grid_transform"]))
 
 
 class Question(BaseModel):

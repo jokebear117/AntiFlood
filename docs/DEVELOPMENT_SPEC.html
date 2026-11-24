@@ -42,11 +42,11 @@
 </aside>
 <main class="main"><article class="doc">
 <header class="hero">
- <div class="eyebrow">Implementation contract / Review draft</div>
+ <div class="eyebrow">초기 설계 기록</div>
  <h1>Anti-Flood<br>개발 명세서</h1>
  <p class="lead">강우 데이터가 순차적으로 입력될 때 서울의 근사 침수 수심을 갱신하고, 필요한 격자 계산만 수행해 멀티코어 CPU에서 결과를 시각화하는 로컬 시스템.</p>
  <div class="meta"><span class="pill warn">사용자 검수 전, 구현 승인 아님</span><span class="pill">버전 0.9</span><span class="pill">2026.11.24</span><span class="pill">기준: ARCHITECTURE.md, DECISIONS.md</span></div>
- <div class="callout"><strong>이 문서의 용도</strong><p>Codex가 임의로 기능을 늘리거나, 연구 실험만 반복하거나, 물리 모델을 바꾸지 못하도록 입력, 출력, 구현 순서, 완료 조건을 계약 형태로 정의한다. 명세에 없는 새로운 기능은 구현하지 않는다.</p></div>
+ <div class="callout"><strong>현재 설계와 실행 방법</strong><p>이 기록은 비교 기능을 추가하기 전의 초안이다. 서울 전역의 Reference 및 Streaming 계산과 비교는 <a href="ARCHITECTURE.md">시스템 아키텍처</a>에, 실제 사용 방법은 <a href="RUNNING.md">설치와 실행</a>에 기록한다.</p></div>
 </header>
 <div class="separator"></div>
 <section id="summary">

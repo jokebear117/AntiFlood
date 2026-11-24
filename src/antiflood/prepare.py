@@ -5,16 +5,18 @@ from hashlib import sha512
 from io import BytesIO
 from pathlib import Path
 from shutil import copyfileobj
+import sys
 from tarfile import open as open_tar
 from tempfile import NamedTemporaryFile
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 from dotenv import load_dotenv
 from remotezip import RemoteZip
 
 from .data import ROOT, dataset_dir
+from .observed import OBSERVED_ARCHIVE
 
 SEOUL_DOWNLOAD = "https://datafile.seoul.go.kr/bigfile/iot/inf/nio_download.do?&useCache=false"
 BRISTOL_ARCHIVE = (
@@ -51,15 +53,19 @@ def valid_zip(path):
             raise ValueError(f"Corrupt source archive member: {bad}")
 
 
-def seoul_file(sequence):
-    form = urlencode({"infId": "OA-1168", "infSeq": "3", "seq": sequence, "seqNo": ""}).encode()
-    return urlopen(Request(SEOUL_DOWNLOAD, data=form), timeout=60)
+def seoul_file(sequence, *, dataset_id="OA-1168", dataset_sequence="3", timeout=60):
+    form = urlencode({"infId": dataset_id, "infSeq": dataset_sequence, "seq": sequence, "seqNo": ""}).encode()
+    return urlopen(Request(SEOUL_DOWNLOAD, data=form), timeout=timeout)
 
 
 def prepare_inputs(dataset):
     raw = dataset / "raw"
     save_if_missing(raw / "rainfall/rainfall_2022.zip", lambda: seoul_file("202214"), valid_zip)
     save_if_missing(raw / "rainfall/stations_epsg5181.zip", lambda: seoul_file("999998"), valid_zip)
+    save_if_missing(
+        raw / "drainage/RAINPUMP.zip",
+        lambda: seoul_file("1", dataset_id="OA-21179", dataset_sequence="2"), valid_zip,
+    )
     tiles = {DEM_TILE: 0xA0B509DB, "N37E126_FABDEM_V1-2.tif": 0xF4C0F290}
     for name, crc in tiles.items():
         dem = raw / "dem" / name
@@ -89,10 +95,23 @@ def prepare_maplibre():
             save_if_missing(directory / Path(name).name, lambda: archive.extractfile(f"package/{name}"))
 
 
+def prepare_observed(dataset):
+    try:
+        save_if_missing(
+            dataset / OBSERVED_ARCHIVE,
+            lambda: seoul_file("30", dataset_id="OA-15636", dataset_sequence="1", timeout=15),
+            valid_zip,
+        )
+    except (OSError, BadZipFile, ValueError) as error:
+        print(f"침수흔적도를 준비할 수 없습니다. {error}", file=sys.stderr, flush=True)
+
+
 def main():
     load_dotenv(ROOT / ".env")
-    prepare_inputs(dataset_dir())
+    dataset = dataset_dir()
+    prepare_inputs(dataset)
     prepare_maplibre()
+    prepare_observed(dataset)
 
 
 if __name__ == "__main__":

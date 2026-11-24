@@ -12,11 +12,14 @@ import numpy as np
 import rasterio
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
+from rasterio.features import rasterize
 from rasterio.merge import merge
 from contextlib import ExitStack
 from rasterio.transform import from_origin
-from rasterio.warp import reproject, transform, transform_bounds
+from rasterio.warp import reproject, transform, transform_bounds, transform_geom
 import shapefile
+
+from . import drainage as drainage_module
 
 ROOT = Path(__file__).resolve().parents[2]
 SEOUL_CRS = CRS.from_epsg(5181)
@@ -24,7 +27,9 @@ KST = timezone(timedelta(hours=9))
 INTERVAL = timedelta(minutes=10)
 CELL_M = 30.0
 MAX_GAUGE_DISTANCE_M = 12_000.0
-DEFAULT_BOUNDS = (127.005, 37.470, 127.065, 37.535)
+DEFAULT_BOUNDS = (126.75, 37.42, 127.20, 37.71)
+MAX_CELLS = 1_650_000
+SEOUL_PADDING_CELLS = 25
 RAIN_START = datetime(2022, 8, 8, tzinfo=KST)
 RAIN_END = datetime(2022, 8, 10, tzinfo=KST)
 
@@ -42,6 +47,9 @@ class GridData:
     drainage_raster_source: str | None
     drainage_fallback_cells: int
     wgs_bounds: tuple[float, float, float, float]
+    drain_mm_h: np.ndarray | None = None
+    drain_class: np.ndarray | None = None
+    drainage_summary: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +108,26 @@ def read_elevation(dataset, destination, affine, crs):
         )
 
 
-def load_grid(dataset, *, bounds=None, drain_mm_h=None, boundary=None, use_drain_raster=True):
+def seoul_mask(shape, affine, all_touched=True):
+    from .observed import seoul_administrative_boundary
+
+    geometry = seoul_administrative_boundary()["features"][0]["geometry"]
+    projected = transform_geom("EPSG:4326", SEOUL_CRS, geometry)
+    return rasterize([projected], out_shape=shape, transform=affine, all_touched=all_touched).astype(bool)
+
+
+def seoul_domain(shape, affine):
+    inside = seoul_mask(shape, affine)
+    # Dilate on the projected grid to retain adjacent terrain on both sides of the city line.
+    radius = SEOUL_PADDING_CELLS
+    for axis in (0, 1):
+        rows = np.moveaxis(inside, axis, 0)
+        summed = np.cumsum(np.pad(rows, ((radius + 1, radius), (0, 0))), axis=0, dtype=np.int32)
+        inside = np.moveaxis(summed[2 * radius + 1:] != summed[:-(2 * radius + 1)], 0, axis)
+    return inside
+
+
+def load_grid(dataset, *, bounds=None, drain_mm_h=None, boundary=None, use_drain_raster=True, drainage=None):
     bounds_setting = os.getenv("ANTIFLOOD_BOUNDS")
     if bounds is None:
         bounds = tuple(map(float, bounds_setting.split(","))) if bounds_setting else DEFAULT_BOUNDS
@@ -118,8 +145,8 @@ def load_grid(dataset, *, bounds=None, drain_mm_h=None, boundary=None, use_drain
     west, south, east, north = transform_bounds("EPSG:4326", SEOUL_CRS, *bounds)
     width = int(np.ceil((east - west) / CELL_M))
     height = int(np.ceil((north - south) / CELL_M))
-    if width * height > 1_000_000:
-        raise ValueError("한 번에 100만 셀 이하가 되도록 계산 범위를 줄여 주세요.")
+    if width * height > MAX_CELLS:
+        raise ValueError("한 번에 165만 셀 이하가 되도록 계산 범위를 줄여 주세요.")
     affine = from_origin(west, north, CELL_M, CELL_M)
     boundary_mode = boundary if boundary is not None else os.getenv("ANTIFLOOD_BOUNDARY", "open")
     if boundary_mode not in ("open", "closed"):
@@ -129,13 +156,18 @@ def load_grid(dataset, *, bounds=None, drain_mm_h=None, boundary=None, use_drain
     read_elevation(dataset, padded_elevation, padded_affine, SEOUL_CRS)
 
     # A projected axis-aligned array may cover more than the WGS84 request.
-    rows, cols = np.indices(padded_elevation.shape, dtype=np.float64)
-    x = padded_affine.c + (cols + 0.5) * CELL_M
-    y = padded_affine.f - (rows + 0.5) * CELL_M
-    lon, lat = np.asarray(transform(SEOUL_CRS, "EPSG:4326", x.ravel(), y.ravel()))
-    inside = (
-        (lon >= bounds[0]) & (lon <= bounds[2]) & (lat >= bounds[1]) & (lat <= bounds[3])
-    ).reshape(padded_elevation.shape)
+    if bounds == DEFAULT_BOUNDS:
+        inside = seoul_domain(padded_elevation.shape, padded_affine)
+        if inside[0].any() or inside[-1].any() or inside[:, 0].any() or inside[:, -1].any():
+            raise ValueError("서울 계산 영역과 여유 지형이 격자 안에 들어오지 않습니다.")
+    else:
+        rows, cols = np.indices(padded_elevation.shape, dtype=np.float64)
+        x = padded_affine.c + (cols + 0.5) * CELL_M
+        y = padded_affine.f - (rows + 0.5) * CELL_M
+        lon, lat = np.asarray(transform(SEOUL_CRS, "EPSG:4326", x.ravel(), y.ravel()))
+        inside = (
+            (lon >= bounds[0]) & (lon <= bounds[2]) & (lat >= bounds[1]) & (lat <= bounds[3])
+        ).reshape(padded_elevation.shape)
     elevation = np.ascontiguousarray(padded_elevation[1:-1, 1:-1])
     valid = np.isfinite(elevation) & inside[1:-1, 1:-1]
     if not valid.any():
@@ -168,14 +200,28 @@ def load_grid(dataset, *, bounds=None, drain_mm_h=None, boundary=None, use_drain
             )
         if np.any(rates[valid & np.isfinite(rates)] < 0):
             raise ValueError("배수율 GeoTIFF에 음수 값이 있습니다.")
+    drainage = drainage or os.getenv("ANTIFLOOD_DRAINAGE", "facility")
+    if drainage not in ("facility", "uniform"):
+        raise ValueError("배수 방식은 facility 또는 uniform으로 지정해 주세요.")
     supplied = valid & np.isfinite(rates)
-    source_type = "assumed"
-    if raster_source == "observed" and supplied.any():
-        source_type = "observed" if supplied.sum() == valid.sum() else "mixed"
-    drain = np.where(valid, np.where(supplied, rates, default_rate) / 3_600_000, 0)
+    if rate_path or drainage == "uniform":
+        source_type = "assumed"
+        if raster_source == "observed" and supplied.any():
+            source_type = "observed" if supplied.sum() == valid.sum() else "mixed"
+        mm_h = np.where(valid, np.where(supplied, rates, default_rate), 0)
+        classes = np.where(valid & supplied & (raster_source == "observed"), drainage_module.SEWER,
+                           drainage_module.ASSUMED).astype(np.uint8)
+        fallback = int((valid & ~supplied).sum())
+    else:
+        source_type = "facility"
+        mm_h, classes = drainage_module.facility_rates(dataset, valid, affine, default_rate)
+        fallback = int((valid & (classes == drainage_module.ASSUMED)).sum())
+    # The native engine takes float64; the raster stores float32.
+    drain = np.ascontiguousarray(mm_h, dtype=np.float64) / 3_600_000
     return GridData(
         elevation, valid, affine, boundary_elevation, boundary_mode, drain, source_type, default_rate,
-        raster_source if rate_path else None, int((valid & ~supplied).sum()), bounds,
+        raster_source if rate_path else None, fallback, bounds,
+        mm_h.astype(np.float32), classes, drainage_module.summary(mm_h, classes, valid),
     )
 
 
