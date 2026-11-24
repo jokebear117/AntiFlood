@@ -33,6 +33,7 @@ let selectedBounds = [127.005,37.470,127.065,37.535];
 let selecting = false;
 let firstCorner;
 let archivedRun;
+let historyVersion = 0;
 let regionReady = false;
 let regionVersion = 0;
 const presets = {
@@ -92,10 +93,12 @@ async function refreshHistory() {
   el("history").value = previous;
 }
 async function openHistory() {
+  const version = ++historyVersion;
   const id = el("history").value;
   if (!id) return;
   try {
     const run = await api(`/api/runs/${id}`);
+    if (version !== historyVersion) return;
     commandVersion += 1;
     archivedRun = run;
     resetTimeline(run.id);
@@ -105,11 +108,12 @@ async function openHistory() {
     updateDomain(metadata.bounds,true);
     renderState({...replayState});
     await selectFrame(frames.length-1);
+    if (version !== historyVersion) return;
     el("live").hidden=false;
     el("reuse").disabled=false;
     el("question").disabled=el("ask").disabled=true;
     el("history-info").textContent = `저장 결과 ${run.id.slice(0,8)} · ${{completed:"완료",stopped:"중단",interrupted:"서버 종료로 중단",running:"계산 중",paused:"일시정지",error:"오류",archived:"이전 기록"}[run.status] || run.status} · ${run.frames.length}장`;
-  } catch(error) { notice(error.message); }
+  } catch(error) { if (version === historyVersion) notice(error.message); }
 }
 
 function formatTime(value) {
@@ -310,6 +314,7 @@ async function poll() {
 
 async function command(operation) {
   if (busy) return;
+  historyVersion += 1;
   busy = true;
   commandVersion += 1;
   notice("");
@@ -535,6 +540,7 @@ el("select-area").addEventListener("click", () => {
 el("seoul").addEventListener("click", () => map?.fitBounds([[126.75,37.42],[127.18,37.70]],{padding:25,duration:0}));
 el("open-run").addEventListener("click",openHistory);
 el("live").addEventListener("click", () => {
+  historyVersion += 1;
   archivedRun=undefined;
   el("question").disabled=el("ask").disabled=!(health.agent_ready && health.replay_ready);
   el("live").hidden=true;
