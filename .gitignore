@@ -13,6 +13,10 @@ __pycache__/
 # Keep source and processed datasets local.
 /Dataset/*
 !/Dataset/README.md
+!/Dataset/processed/
+/Dataset/processed/*
+!/Dataset/processed/seoul_boundary_2025.geojson
+!/Dataset/processed/seoul_pump_capacity_by_district.csv
 
 # Track the output directories without tracking generated files.
 /outputs/*

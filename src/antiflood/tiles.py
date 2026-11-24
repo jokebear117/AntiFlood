@@ -2,6 +2,10 @@
 
 import numpy as np
 from .data import CELL_M
+from .stream import RISK
+
+DRY, LOW, HALO, HIGH = range(4)
+RAIN, SLIDING, DECAY, DEPTH, NEIGHBOUR, INFLOW = (1 << bit for bit in range(6))
 
 
 class TileGrid:
@@ -10,7 +14,7 @@ class TileGrid:
         x = np.floor((grid.affine.c + (cols + 0.5) * CELL_M) / 100).astype(np.int32)
         y = np.floor((grid.affine.f - (rows + 0.5) * CELL_M) / 100).astype(np.int32)
         self.valid = grid.valid.ravel()
-        self.cells = np.flatnonzero(self.valid)
+        self.cells = np.flatnonzero(self.valid).astype(np.int32)
         pairs, cell_tiles = np.unique(np.column_stack((x.ravel()[self.cells], y.ravel()[self.cells])),
                                       axis=0, return_inverse=True)
         self.ids = tuple(f"{tx}_{ty}" for tx, ty in pairs)
@@ -29,29 +33,37 @@ class TileGrid:
         for index, (tx, ty) in enumerate(pairs):
             for k, offset in enumerate(((1, 0), (0, 1), (-1, 0), (0, -1))):
                 self.tile_neighbours[index, k] = by_pair.get((tx + offset[0], ty + offset[1]), -1)
-        self.members = tuple(np.split(
-            self.cells[np.argsort(cell_tiles.ravel(), kind="stable")],
-            np.cumsum(np.bincount(cell_tiles.ravel(), minlength=len(pairs)))[:-1],
-        ))
+        self.ordered_cells = self.cells[np.argsort(self.valid_tiles, kind="stable")]
+        self.starts = np.r_[0, np.cumsum(np.bincount(self.valid_tiles))[:-1]]
+        self.members = tuple(np.split(self.ordered_cells, self.starts[1:]))
+        self.padded_tile_neighbours = np.where(self.tile_neighbours < 0, len(pairs), self.tile_neighbours)
 
-    def prepare(self, rain, scores, depth):
-        tile_score = np.full(len(self.ids), -np.inf)
-        np.maximum.at(tile_score, self.valid_tiles, scores[self.cells])
-        residual = np.zeros(len(self.ids))
-        np.maximum.at(residual, self.valid_tiles, depth[self.cells])
-        raining = np.zeros(len(self.ids), dtype=bool)
-        raining[self.by_cell[np.flatnonzero(rain > 0)]] = True
-        tile_order = np.argsort(-(tile_score + np.minimum(residual, 1) * 10), kind="stable")
-        cell_order = np.concatenate([self.members[i] for i in tile_order]).astype(np.int32)
-        return raining, tile_order, cell_order
+    def maximum(self, values):
+        return np.maximum.reduceat(values[self.ordered_cells], self.starts)
 
-    def select(self, depth, raining, tile_order, cell_order):
-        donors = raining.copy()
-        donors[self.valid_tiles[depth[self.cells] > 0]] = True
-        halo = self.tile_neighbours[donors].ravel()
-        included = donors.copy()
-        included[halo[halo >= 0]] = True
-        ordered = tile_order[included[tile_order]]
-        active = cell_order[included[self.by_cell[cell_order]]]
-        selected = np.ascontiguousarray(included[self.by_cell] & self.valid, dtype=np.uint8)
-        return ordered, active, selected
+    def rain_state(self, gauge_map, rain, history):
+        gauges = gauge_map[self.ordered_cells]
+        return np.stack([
+            np.maximum.reduceat(values[gauges], self.starts)
+            for values in (rain, history.hour_mm, history.decay_mm)
+        ])
+
+    def select(self, depth, rainfall, received):
+        rain, sliding, decay = rainfall
+        maximum = self.maximum(depth)
+        reasons = np.asarray(
+            RAIN * (rain >= RISK.rain_mm)
+            + SLIDING * (sliding >= RISK.hour_mm)
+            + DECAY * (decay >= RISK.decay_mm)
+            + DEPTH * (maximum >= RISK.depth_m), dtype=np.uint8,
+        )
+        high = reasons != 0
+        adjacent = np.r_[high, False][self.padded_tile_neighbours].any(axis=1)
+        incoming = self.maximum(received) != 0
+        reasons[~high & adjacent] |= NEIGHBOUR
+        reasons[~high & incoming] |= INFLOW
+        modes = np.full(len(self.ids), DRY, dtype=np.uint8)
+        modes[(rain > 0) | (maximum > 0)] = LOW
+        modes[adjacent | incoming] = HALO
+        modes[high] = HIGH
+        return modes, reasons

@@ -6,112 +6,143 @@
   <title>Anti-Flood | 서울 침수 시뮬레이션</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/assets/vendor/maplibre-gl.css">
-  <link rel="stylesheet" href="/assets/style.css?v=20f7ffaf905c">
-  <script type="module" src="/assets/app.js?v=e1902956051d"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=map-2">
+  <script type="module" src="/assets/app.js?v=map-2"></script>
 </head>
 <body>
   <header class="top">
-    <div class="top-inner">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <h1>Anti-Flood</h1>
-        <p>서울 침수 시뮬레이션</p>
-      </div>
-      <span id="status" class="status" data-status="loading" role="status">자료 불러오는 중</span>
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <h1>AntiFlood</h1>
+      <p id="header-scenario">서울 침수 계산 비교</p>
     </div>
+    <h2 id="map-title" tabindex="-1">계산 범위를 확인하는 중</h2>
+    <a class="settings-link" href="#setup-title">실행 설정으로</a>
+    <span id="status" class="status" data-status="loading" role="status">자료 불러오는 중</span>
   </header>
 
-  <main class="layout">
-    <section class="map-column" aria-labelledby="map-title">
-      <header class="map-header">
-        <div>
-          <p class="map-caption">지도에 표시한 지역</p>
-          <h2 id="map-title" tabindex="-1">계산 범위를 확인하는 중</h2>
+  <main class="workspace">
+    <section class="stage" aria-label="침수 지도와 시간 분석">
+      <div class="map-area">
+        <div class="map-pair" id="map-pair">
+          <section class="map-panel" id="reference-panel" aria-labelledby="reference-title">
+            <div class="map-shell">
+              <div id="reference-map" aria-label="Reference 수심 지도"></div>
+              <span class="map-badge" id="reference-title">Reference <small>전체 격자</small></span>
+              <p id="reference-empty" class="map-message">Reference 결과 대기</p>
+            </div>
+          </section>
+          <section class="map-panel" aria-labelledby="streaming-title">
+            <div class="map-shell">
+              <div id="map" aria-label="Streaming 수심 지도"></div>
+              <span class="map-badge" id="streaming-title">Streaming <small>선택적 갱신</small></span>
+              <p id="map-loading" class="map-message" role="status">지형을 불러오는 중</p>
+              <p id="streaming-empty" class="map-message" hidden>Streaming 결과 대기</p>
+              <p id="map-error" class="map-message" role="alert" hidden></p>
+              <div id="selection-guide" class="map-message selection-guide" hidden>
+                <p id="selection-hint" role="status"></p>
+                <button id="cancel-selection" type="button">취소</button>
+              </div>
+            </div>
+          </section>
         </div>
-        <a class="settings-link" href="#setup-title">실행 설정으로</a>
-        <div class="map-controls">
-          <div role="group" aria-label="지도 범위">
-            <button id="fit" type="button" disabled>계산 범위로</button>
-            <button id="seoul" type="button" disabled>서울 전체</button>
-          </div>
-          <div role="group" aria-label="지도 레이어">
-            <button id="pitch" type="button" aria-pressed="true" disabled>3D 지형</button>
-            <button id="streets" type="button" aria-pressed="false" disabled>도로 지도</button>
-          </div>
-        </div>
-      </header>
 
-      <div class="map-shell">
-        <div id="map" aria-label="서울 지형 지도"></div>
-        <p id="map-loading" class="map-message" role="status">지형을 불러오는 중</p>
-        <p id="map-error" class="map-message" role="alert" hidden></p>
-        <div id="selection-guide" class="map-message selection-guide" hidden>
-          <p id="selection-hint" role="status"></p>
-          <button id="cancel-selection" type="button">취소</button>
+        <div class="float layer-panel" role="group" aria-label="지도 레이어">
+          <span class="float-title">결과</span>
+          <button type="button" data-layer="depth" aria-pressed="true">수심</button>
+          <button type="button" data-layer="active" aria-pressed="false">활성 Tile</button>
+          <button type="button" data-layer="difference" aria-pressed="false">수심 오차</button>
+          <button type="button" data-layer="observed" aria-pressed="false">침수흔적도</button>
+          <span class="float-title">입력</span>
+          <button type="button" data-layer="drainage" aria-pressed="false">배수능력</button>
+          <button id="gauges" type="button" aria-pressed="true" disabled>관측소 강우</button>
         </div>
+
+        <div class="float view-panel" role="group" aria-label="지도 보기">
+          <button id="split" type="button" aria-pressed="true" disabled>두 모드 나란히</button>
+          <button id="fit" type="button" disabled>계산 범위로</button>
+          <button id="seoul" type="button" disabled>서울 전체</button>
+          <button id="pitch" type="button" aria-pressed="true" disabled>3D 지형</button>
+          <button id="streets" type="button" aria-pressed="false" disabled>도로 지도</button>
+        </div>
+
+        <div class="float legend" hidden>
+          <div class="depth-key">
+            <div class="depth-key-label">
+              <strong id="legend-title">모의 수심 (m)</strong>
+              <span id="legend-note">1 mm 미만은 투명</span>
+            </div>
+            <div id="legend"></div>
+          </div>
+          <p id="layer-key" class="layer-key" hidden></p>
+          <p id="observed-summary" hidden></p>
+          <div class="boundary-key" aria-label="지도에 표시한 경계">
+            <span class="result-boundary">계산 범위</span>
+            <span class="city-boundary">서울시 행정경계</span>
+            <span class="terrain-boundary">지형 자료 범위</span>
+            <span id="draft-key" class="draft-boundary" hidden>새 계산 범위</span>
+          </div>
+        </div>
+
+        <p id="point" class="float point" role="status">지도에서 지점을 선택하면 모의 수심, 배수능력, Tile 상태를 표시합니다</p>
       </div>
 
-      <div class="legend" hidden>
-        <div class="depth-key">
-          <div class="depth-key-label">
-            <strong>모의 수심 (m)</strong>
-            <span>1 mm 미만은 투명</span>
-          </div>
-          <div id="legend"></div>
-        </div>
-        <div class="boundary-key" aria-label="지도에 표시한 경계">
-          <span class="result-boundary">계산 범위</span>
-          <span class="terrain-boundary">지형 자료 범위</span>
-          <span id="draft-key" class="draft-boundary" hidden>새 계산 범위</span>
-        </div>
-      </div>
-
-      <section class="timeline" aria-labelledby="frame-label">
-        <div class="time-meta">
+      <section class="dock" aria-label="시간 막대와 분석">
+        <div class="timeline">
           <div class="time-readout">
             <h3 id="frame-label" tabindex="-1">지도 시각 <span>(KST)</span></h3>
             <strong id="frame-time">저장된 결과 없음</strong>
             <span id="frame-source" class="frame-source" hidden></span>
           </div>
           <div class="time-actions">
+            <button id="play" type="button" disabled>재생</button>
             <button id="latest" type="button" disabled>최신 시각으로</button>
             <button id="live" type="button" hidden>현재 실행으로</button>
           </div>
+          <input id="timeline" type="range" min="0" max="0" value="0" aria-labelledby="frame-label" disabled>
+          <div class="time-endpoints" hidden><span id="time-start"></span><span id="time-end"></span></div>
         </div>
-        <input id="timeline" type="range" min="0" max="0" value="0" aria-labelledby="frame-label" disabled>
-        <div class="time-endpoints" hidden><span id="time-start"></span><span id="time-end"></span></div>
-      </section>
 
-      <section class="results" aria-labelledby="results-title">
-        <h3 id="results-title">선택한 시각의 결과</h3>
-        <dl class="measurements">
-          <div><dt>최대 모의 수심</dt><dd id="depth">—</dd></div>
-          <div><dt>최대 10분 강우량</dt><dd id="rain">—</dd></div>
+        <dl class="kpis" aria-label="선택 시각의 결과와 비교 지표">
+          <div class="kpi-main"><dt>최대 모의 수심</dt><dd id="depth">—</dd></div>
+          <div><dt>최대 10분 강우</dt><dd id="rain">—</dd></div>
           <div><dt>활성 계산 셀</dt><dd id="cells">—</dd></div>
-          <div><dt>활성 타일</dt><dd id="tiles">—</dd></div>
+          <div><dt>활성 Tile</dt><dd id="tiles">—</dd></div>
+          <div><dt>갱신 지연</dt><dd id="latency">미측정</dd></div>
+          <div><dt>Speedup</dt><dd id="speedup">미측정</dd></div>
+          <div><dt>계산량 감소율</dt><dd id="reduction">미측정</dd></div>
+          <div><dt>수심 RMSE</dt><dd id="rmse">미측정</dd><small id="flood-rmse" hidden></small></div>
+          <div><dt>침수 IoU</dt><dd id="iou">미측정</dd></div>
         </dl>
-        <p id="point" class="point" role="status">지도에서 지점을 선택해 모의 수심과 타일 상태를 확인하세요</p>
-        <details class="result-details">
-          <summary>관측 시각과 계산 조건</summary>
-          <dl class="summary">
-            <div><dt>강우 관측 시각 (KST)</dt><dd id="observed">—</dd></div>
-            <div><dt>사용한 CPU 스레드</dt><dd id="workers">—</dd></div>
-          </dl>
-          <p id="assumptions">지형과 배수 조건을 확인하는 중</p>
-          <p id="scope" class="coordinates"></p>
-        </details>
+
+        <div class="charts">
+          <section aria-labelledby="series-title">
+            <h3 id="series-title">입력 강우와 모의 수심</h3>
+            <div id="time-series" class="chart"></div>
+            <p id="series-note" class="chart-note">계산 결과가 저장되면 시각별 강우와 수심을 표시합니다. 막대를 누르면 그 시각으로 이동합니다.</p>
+          </section>
+          <section aria-labelledby="performance-title">
+            <h3 id="performance-title">계산 성능</h3>
+            <div id="latency-series" class="chart"></div>
+            <div id="performance-chart"></div>
+            <p id="total-performance" class="chart-note"></p>
+          </section>
+          <section aria-labelledby="windows-title">
+            <h3 id="windows-title">선택 Tile의 강우와 Window</h3>
+            <div id="window-series" class="chart"></div>
+            <p id="window-note" class="chart-note">지도에서 Tile을 선택하면 관측과 Window 값을 표시합니다.</p>
+          </section>
+        </div>
       </section>
     </section>
 
-    <aside class="sidebar" aria-label="시뮬레이션 실행과 기록">
-      <section class="setup" aria-labelledby="setup-title">
-        <header class="setup-header">
-          <h2 id="setup-title" tabindex="-1">실행 설정</h2>
-          <a class="settings-link" href="#map-title">지도로</a>
-        </header>
+    <aside class="rail" aria-label="시뮬레이션 실행과 기록">
+      <details class="setup" open>
+        <summary id="setup-title">실행 설정</summary>
         <div class="field">
-          <label for="area">새 계산 지역</label>
+          <label for="area">계산 지역</label>
           <select id="area" aria-describedby="region-info">
+            <option value="seoul">서울 전역</option>
             <option value="gangnam">강남역 주변</option>
             <option value="yeouido">여의도 주변</option>
             <option value="mapo">마포 주변</option>
@@ -130,10 +161,28 @@
           <p id="rain-source">2022년 8월 서울시 10분 강우 관측</p>
         </div>
 
+        <div class="field">
+          <label for="mode">계산 모드</label>
+          <select id="mode">
+            <option value="compare">두 모드 비교</option>
+            <option value="reference">Reference</option>
+            <option value="streaming">Streaming</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="drainage">배수 조건</label>
+          <select id="drainage" aria-describedby="drainage-info">
+            <option value="facility">시설 제원 기반 지역별 배수능력</option>
+            <option value="uniform">균일 가정 배수율</option>
+          </select>
+          <p id="drainage-info">하수관 설계 강우강도와 자치구별 빗물펌프장 용량으로 셀마다 배수능력을 정합니다.</p>
+        </div>
+
         <details class="run-settings">
-          <summary>배수와 계산 조건</summary>
+          <summary>세부 계산 조건</summary>
           <div class="settings-grid">
-            <label>가정 배수율 (mm/h)<input id="drain" type="number" min="0" max="500" step="0.5" value="5"></label>
+            <label><span id="drain-label">서울 밖 가정 배수율 (mm/h)</span><input id="drain" type="number" min="0" max="500" step="0.5" value="5"></label>
             <label>CPU 스레드<input id="threads" type="number" min="1" max="64" step="1" value="4"></label>
           </div>
           <label for="boundary">외곽 경계</label>
@@ -150,31 +199,43 @@
           <progress id="progress" max="1" value="0"></progress>
           <div class="clock-line"><span>계산한 시각 (KST)</span><time id="computed-time">—</time></div>
         </div>
-      </section>
+      </details>
 
-      <section class="secondary" aria-label="저장 기록과 결과 설명">
-        <details id="history-panel">
-          <summary>저장된 실행</summary>
-          <div class="details-body">
-            <label for="history">실행 기록</label>
-            <select id="history"><option value="">기록 선택</option></select>
-            <div class="actions"><button id="open-run" type="button" disabled>결과 열기</button><button id="reuse" type="button" disabled>설정 재사용</button></div>
-            <p id="history-info" class="history-info" role="status" hidden></p>
-          </div>
-        </details>
-        <details>
-          <summary>Solar에게 결과 묻기</summary>
-          <div class="details-body">
-            <p id="agent-status">현재 실행의 모의 수심과 타일 상태를 물어볼 수 있습니다.</p>
-            <form id="agent-form">
-              <label for="question">질문</label>
-              <textarea id="question" maxlength="500" rows="2" placeholder="예: 최대 모의 수심은?" disabled></textarea>
-              <button id="ask" type="submit" disabled>질문하기</button>
-            </form>
-            <p id="answer" role="status"></p>
-          </div>
-        </details>
-      </section>
+      <details class="inputs" open>
+        <summary>입력 자료와 가정</summary>
+        <div class="details-body">
+          <dl id="drainage-summary" class="input-stats"></dl>
+          <p id="assumptions">지형과 배수 조건을 확인하는 중</p>
+          <dl class="summary">
+            <div><dt>강우 관측 시각 (KST)</dt><dd id="observed">—</dd></div>
+            <div><dt>사용한 CPU 스레드</dt><dd id="workers">—</dd></div>
+          </dl>
+          <p id="scope" class="coordinates"></p>
+        </div>
+      </details>
+
+      <details id="history-panel">
+        <summary>저장된 실행</summary>
+        <div class="details-body">
+          <label for="history">실행 기록</label>
+          <select id="history"><option value="">기록 선택</option></select>
+          <div class="actions"><button id="open-run" type="button" disabled>결과 열기</button><button id="reuse" type="button" disabled>설정 재사용</button></div>
+          <p id="history-info" class="history-info" role="status" hidden></p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Solar에게 결과 묻기</summary>
+        <div class="details-body">
+          <p id="agent-status">현재 실행의 모의 수심과 타일 상태를 물어볼 수 있습니다.</p>
+          <form id="agent-form">
+            <label for="question">질문</label>
+            <textarea id="question" maxlength="500" rows="2" placeholder="예: 최대 모의 수심은?" disabled></textarea>
+            <button id="ask" type="submit" disabled>질문하기</button>
+          </form>
+          <p id="answer" role="status"></p>
+        </div>
+      </details>
     </aside>
   </main>
 </body>
