@@ -47,3 +47,12 @@
 - 상태: DONE
 - 결과: 완료 조건 A1–A7을 현재 소스·Git 이력·기존 검증 기록과 대조했고, 추가 수정이 필요한 실제 결함은 확인하지 못했다. 제품 변경 없이 DONE 후보로 보고한다.
 - 검증: 실행: 현재 서버 health 정상, simulation/state 대기 상태 확인. 저장 기록 재열기·설정 보존·PNG HTTP 200 확인. 코드에서 UI 제어·프레임 표시·WCA2D/OpenMP·입력 제한·실행기·Solar 읽기 전용 연결 확인. 첫 기록 조회는 PowerShell 배열 처리 오류로 실패한 뒤 명령을 수정해 성공했다. WSL 접근은 E_ACCESSDENIED로 실패했다. 미실행: 전체 검증 스크립트, 새 계산, 브라우저 렌더링. 기존 104프레임 실데이터 검증은 HISTORY의 과거 근거로만 참조했다. / 독립 컨트롤러: {"passed": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"], "run_id": "504869473b214decac562940b75f3319", "bounds": [126.999, 37.499, 127.001, 37.501], "frames": 104, "last_frame": {"frame_source": "computed", "id": "504869473b214decac562940b75f3319_00103", "time": "2022-08-08T22:30:00Z", "rain_observed_at": "2022-08-08T22:29:00Z", "rain_interval_mm": [0.0], "rain_max_mm": 0.0, "max_depth_m": 3.0034755218192317, "active_tile_count": 6, "active_cell_count": 42, "cumulative_cell_updates": 834792, "worker_count": 2, "rain_m3": 14137.199999999979, "drain_m3": 1326.0563856496883, "boundary_outflow_m3": 0.0, "water_m3": 12811.143614350316, "mass_error_m3": 2.546585164964199e-11}, "point": {"tile_id": "1999_4445", "depth_m": 0.0, "time": "2022-08-08T22:30:00Z", "active": true, "rain": [{"station_id": "2402", "name": "반포펌프장", "mm": 0.0}]}, "launcher_reused_pid": "26", "limits": "UI wiring and HTTP flow checked; no fresh browser rendering or paid Solar response asserted"}
+
+## 라운드 2 이후 재현한 대시보드 결함
+
+라운드 2와 별도 실데이터 검증은 A1–A7을 확인했다. 그 실행 범위에 없던 다음 두 결함을 실제 `web/app.js` 함수와 이벤트 처리 코드를 실행하는 Node 재현으로 확인했다. GOAL의 기존 동작 범위에서 한 라운드에 하나씩 수정한다.
+
+- A3 입력 복구. 스레드 값 0으로 영역 확인 요청이 422를 받으면 값을 4로 바로잡아도 시작 버튼을 다시 쓸 수 없다. 입력을 고친 뒤 유효한 영역에서 시작할 수 있어야 한다.
+- A4 저장 결과 전환. 저장 결과 A를 요청한 뒤 B를 열 때 B가 먼저 응답하면 뒤늦게 도착한 A가 화면을 덮어쓴다. 마지막으로 요청한 결과가 화면에 남아야 한다.
+
+재현 명령은 `node .ralph/runtime/dashboard-repro.cjs`다. 수정 전 두 경우 모두 실패했다. 테스트는 DOM과 응답 순서를 제어하고 기존 앱 코드를 실행한다. 어느 하나를 수정하면 그 항목의 PASS를 확인하고, 남은 항목은 다음 라운드로 넘긴다. 재현 파일은 로컬 런타임에 있다.
