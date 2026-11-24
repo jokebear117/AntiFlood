@@ -552,7 +552,7 @@ async function showPoint(point, frame = shownFrame) {
     if (version !== pointVersion) return;
     const mode = ["Dry","Low Risk","Halo","High Risk"][result.tile_mode];
     if (mode) {
-      const reasons = ["10분 강우","60분 누적","감쇠 점수","잔류 수심","고위험 Tile 인접","이전 단계 유입"]
+      const reasons = ["10분 강우","60분 누적","감쇠 점수","잔류 수심","고위험 Tile 인접","이전 단계 유입","이번 10분 구간에 이미 활성"]
         .filter((_,bit) => result.reasons & (1 << bit));
       const start = Date.parse(currentRun?.scenario.start);
       const last = result.last_update_seconds < 0 || !Number.isFinite(start) ? "기록 없음" :

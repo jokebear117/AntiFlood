@@ -5,7 +5,8 @@ from .data import CELL_M
 from .stream import RISK
 
 DRY, LOW, HALO, HIGH = range(4)
-RAIN, SLIDING, DECAY, DEPTH, NEIGHBOUR, INFLOW = (1 << bit for bit in range(6))
+# KEPT: already active earlier in the same 10-minute interval (set by the simulation session).
+RAIN, SLIDING, DECAY, DEPTH, NEIGHBOUR, INFLOW, KEPT = (1 << bit for bit in range(7))
 
 
 class TileGrid:
