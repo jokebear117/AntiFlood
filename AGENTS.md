@@ -7,3 +7,11 @@
 필요에 따라 [실행 안내](docs/RUNNING.md), [시스템 아키텍처](docs/ARCHITECTURE.md), [구현 결정과 검증](docs/DECISIONS.md), [데이터 출처와 범위](Dataset/README.md)를 확인한다.
 
 Ralph 실행은 `python scripts/ralph-loop.py`를 사용한다. 시작 전에 `.ralph/GOAL.md`, `STATE.md`, `PROMPT.md`, `HISTORY.md`를 읽는다. `ralph/` 브랜치에서 작업하며 완료 조건은 유지한다. 커밋·푸시는 외부 컨트롤러가 변경 파일을 검토한 뒤 수행한다. 상세 실행 결과와 복구 해시는 `.ralph/runtime/`에 보관한다.
+
+## README 유지 관리
+
+루트 `README.md`를 작성하거나 수정하기 전에 [README 작성 및 유지 규칙](docs/README_RULES.md)을 반드시 읽고 준수한다.
+
+섹션 구성, 프로젝트 주제 문장, 문체, 시각적 표현 방식은 사용자가 확정한 문서 규격이다. 이 규격을 변경하려면 사용자 승인을 받는다.
+
+구현 변경으로 README를 갱신할 때는 관련 내용만 수정하고 나머지 본문은 보존한다.
