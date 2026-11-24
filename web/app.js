@@ -490,6 +490,9 @@ async function init() {
 el("primary").addEventListener("click", () => command(el("primary").dataset.operation));
 el("reset").addEventListener("click", () => command("reset"));
 el("scenario").addEventListener("change", setEndpoints);
+for (const id of ["drain", "threads", "boundary"]) {
+  el(id).addEventListener("change", () => { void previewRegion(false); });
+}
 el("timeline").addEventListener("input", (event) => {
   const index = Number(event.target.value);
   follow = index === frames.length - 1;

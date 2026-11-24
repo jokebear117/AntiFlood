@@ -56,3 +56,10 @@
 - A4 저장 결과 전환. 저장 결과 A를 요청한 뒤 B를 열 때 B가 먼저 응답하면 뒤늦게 도착한 A가 화면을 덮어쓴다. 마지막으로 요청한 결과가 화면에 남아야 한다.
 
 재현 명령은 `node .ralph/runtime/dashboard-repro.cjs`다. 수정 전 두 경우 모두 실패했다. 테스트는 DOM과 응답 순서를 제어하고 기존 앱 코드를 실행한다. 어느 하나를 수정하면 그 항목의 PASS를 확인하고, 남은 항목은 다음 라운드로 넘긴다. 재현 파일은 로컬 런타임에 있다.
+
+## 컨트롤러 라운드 3
+
+- 시작 HEAD: 9dddfcfe93b4382e55f31844cbecb70055733ade
+- 상태: CONTINUE
+- 결과: A3 입력 복구 결함을 수정했다. 배수율·스레드·경계 변경 시 기존 영역 확인을 다시 실행해, 잘못된 값을 고친 뒤 시작할 수 있다. A4 저장 결과 전환 경쟁 문제는 다음 라운드에 남겼다.
+- 검증: node .ralph/runtime/dashboard-repro.cjs: validationRecovery 수정 전 FAIL → 수정 후 PASS, historyRace는 여전히 FAIL. node --check web/app.js와 git diff --check 통과. 기존 서버 ready 확인. 전체 검증·새 계산·브라우저 렌더링은 실행하지 않았다.
