@@ -74,3 +74,10 @@
 ## 라운드 4 후 확인한 입력 복구 회귀
 
 스레드·배수율·경계를 변경하면 영역의 강우 목록을 다시 받아 온다. 라운드 3 변경 이후 두 번째 시나리오를 선택한 상태에서 스레드를 4에서 8로 바꾸면 첫 번째 시나리오가 자동으로 선택된다. 기존 사용자가 고른 시나리오가 여전히 목록에 있을 때는 그대로 유지해야 한다. `node .ralph/runtime/dashboard-repro.cjs`에서 `settingsKeepScenario`가 실패하고 기존 두 항목은 통과하는 것을 확인했다. 다음 라운드에서 이 회귀를 수정한 뒤 독립 세션에서 완료 여부를 확인한다.
+
+## 컨트롤러 라운드 5
+
+- 시작 HEAD: 487accca3a66db9e91bebe0fedbe57783a9b2636
+- 상태: CONTINUE
+- 결과: A3 설정 변경 시 강우 시나리오 선택이 초기화되는 회귀를 수정했어. 새 목록에 기존 시나리오가 있으면 선택을 유지해.
+- 검증: node .ralph/runtime/dashboard-repro.cjs: 수정 전 settingsKeepScenario FAIL, 수정 후 세 항목 모두 PASS. node --check web/app.js와 git diff --check 통과. 서버 ready 확인. 전체 검증·새 계산·브라우저 렌더링은 미실행.

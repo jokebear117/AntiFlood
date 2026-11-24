@@ -64,7 +64,9 @@ async function previewRegion(fit=true) {
     const data = await post("/api/region", settings());
     if (version !== regionVersion) return;
     catalog = data.scenarios;
+    const previousScenario = el("scenario").value;
     el("scenario").replaceChildren(...catalog.map(item=>new Option(item.title,item.id)));
+    if (catalog.some(item => item.id === previousScenario)) el("scenario").value = previousScenario;
     regionReady = true;
     el("region-info").textContent = `${data.map.valid_cell_count.toLocaleString()} 셀 · 메모리 약 ${data.estimated_memory_mb} MB${data.warning ? " · "+data.warning : ""}`;
     updateDomain(selectedBounds,fit);
