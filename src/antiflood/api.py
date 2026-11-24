@@ -21,12 +21,13 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 import shapefile
 from rasterio import Affine
+from rasterio.warp import transform
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import uvicorn
 
 from . import agent, drainage, history, observed
-from .data import ROOT, dataset_dir, load_gauges, load_grid, load_scenarios, DEFAULT_BOUNDS, MAX_CELLS, dem_paths
+from .data import ROOT, SEOUL_CRS, dataset_dir, load_gauges, load_grid, load_scenarios, DEFAULT_BOUNDS, MAX_CELLS, dem_paths
 from .frames import MapRasters, array_png
 from .replay import Replay, ReplayConflict, gauge_list
 from .simulation import NativeEngine
@@ -164,6 +165,41 @@ def drainage_png(rate, source, valid, affine):
     values = np.where(source == drainage.ASSUMED, -1, rate)
     return Response(array_png(values, valid, affine, "drainage"), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/drainage/point")
+def drainage_point(
+    lon: Annotated[float, Query(ge=-180, le=180)],
+    lat: Annotated[float, Query(ge=-85, le=85)],
+    run: str | None = None,
+):
+    """Return the drainage rate the engine uses at a point and how it was derived."""
+    try:
+        if run:
+            directory = history.run_directory(app.state.frame_root, run)
+            info = json.loads((directory / "run.json").read_text(encoding="utf8"))
+            with np.load(directory / "drainage.npz") as arrays:
+                rate, source = arrays["rate"], arrays["source"]
+            affine = Affine(*info["map"]["grid_transform"])
+            valid = np.load(directory / "valid.npy", mmap_mode="r")
+        else:
+            grid = app.state.preview_grid
+            if grid is None or grid.drain_mm_h is None:
+                raise FileNotFoundError
+            rate, source, affine, valid = grid.drain_mm_h, grid.drain_class, grid.affine, grid.valid
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        raise HTTPException(404, "배수능력 자료가 없습니다.") from exc
+    x, y = transform("EPSG:4326", SEOUL_CRS, [lon], [lat])
+    col, row = (~affine) * (x[0], y[0])
+    row, col = int(np.floor(row)), int(np.floor(col))
+    if not (0 <= row < valid.shape[0] and 0 <= col < valid.shape[1] and valid[row, col]):
+        raise HTTPException(404, "선택한 위치는 계산 범위 밖입니다.")
+    value, kind = float(rate[row, col]), int(source[row, col])
+    return {
+        "drain_mm_h": round(value, 2),
+        "drain_source": drainage.CLASS_NAMES[kind],
+        "basis": drainage.explain(app.state.dataset, x[0], y[0], round(value, 2), kind),
+    }
 
 
 @app.get("/api/region/drainage.png")

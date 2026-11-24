@@ -214,11 +214,10 @@ def load_grid(dataset, *, bounds=None, drain_mm_h=None, boundary=None, use_drain
         fallback = int((valid & ~supplied).sum())
     else:
         source_type = "facility"
-        mm_h, classes = drainage_module.facility_rates(
-            dataset, valid, affine, seoul_mask(valid.shape, affine, all_touched=False), default_rate,
-        )
+        mm_h, classes = drainage_module.facility_rates(dataset, valid, affine, default_rate)
         fallback = int((valid & (classes == drainage_module.ASSUMED)).sum())
-    drain = mm_h / 3_600_000
+    # The native engine takes float64; the raster stores float32.
+    drain = np.ascontiguousarray(mm_h, dtype=np.float64) / 3_600_000
     return GridData(
         elevation, valid, affine, boundary_elevation, boundary_mode, drain, source_type, default_rate,
         raster_source if rate_path else None, fallback, bounds,

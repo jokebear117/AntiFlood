@@ -534,16 +534,22 @@ function renderWindows(frame, indices) {
 
 async function showPoint(point, frame = shownFrame) {
   const version = ++pointVersion;
+  const search = new URLSearchParams({lon:point.lng,lat:point.lat});
+  // The drainage rate is an input, so it can be inspected before any result exists.
+  const drainSearch = new URLSearchParams({lon:point.lng,lat:point.lat,...(currentRun ? {run:currentRun.id} : {})});
+  let drainError = "";
+  const drainInfo = await api("/api/drainage/point?" + drainSearch).catch((error) => { drainError = error.message; return null; });
+  if (version !== pointVersion) return;
+  const drain = drainInfo ? "\n배수능력 " + num(drainInfo.drain_mm_h) + " mm/h, " +
+    ({assumed: "가정값", sewer: "시설 제원 추정값", pump: "시설 제원 추정값"}[drainInfo.drain_source] ?? "") +
+    "\n근거: " + drainInfo.basis : "";
   if (!frame) {
-    el("point").textContent = "계산 결과를 저장하면 선택한 지점의 모의 수심을 표시합니다.";
+    el("point").textContent = drainInfo ? drain.trimStart() + "\n계산 결과를 저장하면 이 지점의 모의 수심도 표시합니다." : drainError;
     return;
   }
-  const search = new URLSearchParams({lon:point.lng,lat:point.lat});
   try {
     const result = await api("/api/frames/" + frame.id + "/point?" + search);
     if (version !== pointVersion) return;
-    const drain = result.drain_mm_h == null ? "" : "\n배수능력 " + num(result.drain_mm_h) + " mm/h (" +
-      ({assumed: "가정값", sewer: "하수관 설계 강우강도", pump: "빗물펌프장 용량 제한"}[result.drain_source] ?? "") + ")";
     const mode = ["Dry","Low Risk","Halo","High Risk"][result.tile_mode];
     if (mode) {
       const reasons = ["10분 강우","60분 누적","감쇠 점수","잔류 수심","고위험 Tile 인접","이전 단계 유입"]

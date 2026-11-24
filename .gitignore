@@ -17,6 +17,7 @@ __pycache__/
 /Dataset/processed/*
 !/Dataset/processed/seoul_boundary_2025.geojson
 !/Dataset/processed/seoul_pump_capacity_by_district.csv
+!/Dataset/processed/seoul_drainage_capacity_30m.tif
 
 # Track the output directories without tracking generated files.
 /outputs/*
