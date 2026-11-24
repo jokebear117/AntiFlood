@@ -1,25 +1,11 @@
 # 현재 상태
 
-- 상태: CONTINUE
-- 완료 라운드: 1
-- 결과: 첫 독립 gpt-6.1-sol / medium 세션은 실행됐으나 도구 프로세스 생성 실패로 제품 분석을 수행하지 못했다. 외부 담당 세션은 기존 제품의 A1–A7을 아래 범위에서 확인했다. 추가 제품 변경은 없다.
-- 검증: WSL 실데이터 재생 완료, 104개 프레임, OpenMP 2스레드, 모든 생성 수심 배열의 유한값·비음수 및 수량 오차 검사 통과. 마지막 수량 오차 2.546585164964199e-11 m³. 근거는 HISTORY와 `.ralph/runtime/acceptance.json`이다.
-- 시작 체크포인트: 36fa20efe6c067b328e67350b54ac84c74089a16
+- 상태: DONE
+- 완료 라운드: 2
+- 결과: 완료 조건 A1–A7을 현재 소스·Git 이력·기존 검증 기록과 대조했고, 추가 수정이 필요한 실제 결함은 확인하지 못했다. 제품 변경 없이 DONE 후보로 보고한다.
+- 검증: 실행: 현재 서버 health 정상, simulation/state 대기 상태 확인. 저장 기록 재열기·설정 보존·PNG HTTP 200 확인. 코드에서 UI 제어·프레임 표시·WCA2D/OpenMP·입력 제한·실행기·Solar 읽기 전용 연결 확인. 첫 기록 조회는 PowerShell 배열 처리 오류로 실패한 뒤 명령을 수정해 성공했다. WSL 접근은 E_ACCESSDENIED로 실패했다. 미실행: 전체 검증 스크립트, 새 계산, 브라우저 렌더링. 기존 104프레임 실데이터 검증은 HISTORY의 과거 근거로만 참조했다. / 독립 컨트롤러: {"passed": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"], "run_id": "504869473b214decac562940b75f3319", "bounds": [126.999, 37.499, 127.001, 37.501], "frames": 104, "last_frame": {"frame_source": "computed", "id": "504869473b214decac562940b75f3319_00103", "time": "2022-08-08T22:30:00Z", "rain_observed_at": "2022-08-08T22:29:00Z", "rain_interval_mm": [0.0], "rain_max_mm": 0.0, "max_depth_m": 3.0034755218192317, "active_tile_count": 6, "active_cell_count": 42, "cumulative_cell_updates": 834792, "worker_count": 2, "rain_m3": 14137.199999999979, "drain_m3": 1326.0563856496883, "boundary_outflow_m3": 0.0, "water_m3": 12811.143614350316, "mass_error_m3": 2.546585164964199e-11}, "point": {"tile_id": "1999_4445", "depth_m": 0.0, "time": "2022-08-08T22:30:00Z", "active": true, "rain": [{"station_id": "2402", "name": "반포펌프장", "mm": 0.0}]}, "launcher_reused_pid": "26", "limits": "UI wiring and HTTP flow checked; no fresh browser rendering or paid Solar response asserted"}
+- 시작 체크포인트: b37743fa1140ed21ce773048fc0042562d88e1b1
 - 최신 체크포인트: 이 파일을 담은 HEAD (`git rev-parse HEAD`)
-- 마지막 정상 커밋: 21f4d5387884653867edea2358dde9b18cedc49b
-- 장애물: 독립 CLI에서 `registered Core launch requires an installed app`, Node 런타임에서 `app runtime provisioning service is unavailable; refusing helper fallback`. `codex doctor`는 elevated Windows sandbox provisioning이 불완전하거나 오래됐다고 보고했다. 보안·승인 설정을 변경하거나 시스템을 재설치하지 않았다.
-- 다음 행동: `python scripts/ralph-loop.py --max-rounds 2`로 두 번의 독립 세션을 시작한다. 대시보드의 프레임 전환과 저장 설정 재사용 등 기존 사용자 흐름에서 가장 중요한 재현 가능한 결함을 하나씩 선택한다.
-- 환경 재검증: npm 독립 CLI에 Desktop 실행 문맥을 넘기지 않자 `workspace-write`에서 테스트 파일을 만들고 읽고 지웠다. Ralph가 새 경로에서 실제 개발을 이어 가는지는 다음 라운드에서 확인한다.
-- 실제 복구 해시·푸시 결과: `.ralph/runtime/checkpoints.json`. 원격 전용 브랜치: ralph/completion-check
-
-| 조건 | 현재 결과와 근거 |
-| --- | --- |
-| A1 | 통과: README 네 섹션과 현재 구현 경로 확인 |
-| A2 | 통과: 실제 강우 연속 재생, 활성 셀 작업 834792회, OpenMP 2스레드 및 수량·수심 검사 |
-| A3 | 통과: UI 설정·제어 연결 코드와 실제 HTTP 시작·일시정지·재개·초기화. 새 브라우저 렌더링은 미실행 |
-| A4 | 통과: 초기화 후 기록·PNG·셀 수심 조회, 저장 설정으로 별도 실행 ID 시작 |
-| A5 | 통과: 동서 타일 연결 영역 및 여의도 쪽 서부 영역 사전 확인. 잘못된 스레드 설정 422 거절 |
-| A6 | 통과: Launch.cmd 연결 코드와 기본 배포판의 launch.sh 성공, 기존 서버 PID 864 유지. Windows 브라우저 새 창 열기는 재실행하지 않음 |
-| A7 | 통과: 읽기 전용 조회 코드와 키 미설정 503. 실제 Solar 외부 응답은 미검증 |
-
-실측 침수 수심 정확도는 검증하지 않았다. 위 제품 확인은 독립 CLI 내부에서 수행된 검증이 아니므로 자율 시스템 전체를 DONE으로 보고하지 않는다.
+- 다음 행동: 완료 조건 확인을 마쳤다.
+- 이번 실행 로그: `.ralph/runtime/run-1795487832399964600`
+- 실제 복구 해시: `.ralph/runtime/checkpoints.json`. 작업 브랜치: ralph/completion-check
