@@ -9,6 +9,8 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 
+from antiflood.history import load_depth
+
 ROOT = Path(__file__).resolve().parents[1]
 ADDRESS = "http://127.0.0.1:8000"
 
@@ -34,7 +36,8 @@ def main():
             "Existing simulation state must be preserved; use an idle ready server")
     readme = (ROOT / "README.md").read_text(encoding="utf8")
     require([line for line in readme.splitlines() if line.startswith("## ")] ==
-            ["## 프로젝트 주제", "## 프로젝트 동기", "## 시스템 아키텍처", "## 리포지토리 폴더 구조"], "README sections differ")
+            ["## 프로젝트 주제", "## 프로젝트 동기", "## 빅데이터 알고리즘의 적용",
+             "## 시스템 아키텍처", "## 리파지토리 구조"], "README sections differ")
     js = request("/assets/app.js", raw=True).decode()
     html = request("/", raw=True).decode()
     require(all(f'id="{name}"' in html for name in ("area", "drain", "threads", "boundary", "reuse", "open-run"))
@@ -46,7 +49,8 @@ def main():
     require(subprocess.check_output(["pgrep", "-f", "^.*python.*-m antiflood.api$"], text=True).strip() == pid_before,
             "Launcher changed server process")
     require('wsl.exe -- sh scripts/launch.sh' in (ROOT / "Launch.cmd").read_text(), "Windows launcher wiring differs")
-    settings = {"bounds": [126.999, 37.499, 127.001, 37.501], "drain_mm_h": 2, "threads": 2, "boundary": "closed"}
+    settings = {"bounds": [126.999, 37.499, 127.001, 37.501], "drain_mm_h": 2, "threads": 2,
+                "boundary": "closed", "drainage": "uniform"}
     region = request("/api/region", settings)
     require(region["map"]["valid_cell_count"] > 0 and region["scenarios"], "Seam region unavailable")
     west = request("/api/region", {**settings, "bounds": [126.925, 37.515, 126.927, 37.517]})
@@ -59,7 +63,8 @@ def main():
     run_id = None
     owned_ids = set()
     try:
-        started = request("/api/simulation/start", {**settings, "scenario_id": region["scenarios"][0]["id"]})
+        started = request("/api/simulation/start", {**settings, "scenario_id": region["scenarios"][0]["id"],
+                                                     "mode": "streaming"})
         run_id = started["run_id"]
         owned_ids.add(run_id)
         paused = request("/api/simulation/pause", {})
@@ -84,7 +89,7 @@ def main():
         # Inspect every generated depth grid, and the application's conservation check.
         for frame in frames:
             stem = frame["id"].rsplit("_", 1)[1]
-            depth = np.load(ROOT / "outputs/frames" / run_id / f"{stem}.npy")
+            depth = load_depth(ROOT / "outputs/frames" / run_id, stem)
             require(np.isfinite(depth).all() and depth.min() >= 0, "Invalid depth grid")
             require(abs(frame["mass_error_m3"]) <= max(1e-7, frame["rain_m3"] * 1e-10), "Mass balance failed")
         request("/api/simulation/reset", {})
@@ -93,7 +98,8 @@ def main():
         require(request(f"/api/frames/{frame_id}.png", raw=True).startswith(b"\x89PNG\r\n\x1a\n"), "Frame PNG missing")
         point = request(f"/api/frames/{frame_id}/point?lon=127&lat=37.5")
         require(point["depth_m"] >= 0 and point["rain"], "Saved point lookup failed")
-        reused = request("/api/simulation/start", {**run["settings"], "scenario_id": run["scenario"]["id"]})
+        reused = request("/api/simulation/start", {**run["settings"], "scenario_id": run["scenario"]["id"],
+                                                    "mode": "streaming"})
         owned_ids.add(reused["run_id"])
         require(reused["run_id"] != run_id and reused["settings"] == settings, "Settings reuse failed")
         request("/api/simulation/reset", {})

@@ -1058,7 +1058,9 @@ async function init() {
     const runs = await refreshHistory();
     if (health.replay_ready) {
       await poll();
-      const demo = runs.find(run => run.reference_id && run.status === "completed" && presetKey(run.map.bounds) === "seoul");
+      const demo = runs.find(run => run.reference_id && run.status === "completed" &&
+        run.map.drainage_source === "facility" && run.frame_count === run.scenario.interval_count &&
+        presetKey(run.map.bounds) === "seoul");
       if (!replayState.run_id && demo) {
         el("history").value = demo.id;
         await openHistory(false);
