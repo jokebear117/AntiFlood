@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -15,7 +16,18 @@ ROOT = Path(__file__).resolve().parents[1]
 RALPH = ROOT / ".ralph"
 RUNTIME = RALPH / "runtime"
 GUARDED = [".ralph/GOAL.md", "scripts/ralph-loop.py", "scripts/ralph-verify.py",
-           "AGENTS.md", ".gitignore"]
+           "AGENTS.md", ".gitignore", ".ralph/PROMPT.md", ".ralph/STATE.md", ".ralph/HISTORY.md"]
+DESKTOP_CONTEXT = {
+    "CODEX_APP_RUNTIME_CLI_PATH", "CODEX_APP_TOOLS_PIPE_PATH", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "CODEX_MCP_NODE_PATH", "CODEX_SESSION_ID", "CODEX_SHELL", "CODEX_TASK_WORKSPACE_VERIFYING_IDENTITY",
+    "CODEX_THREAD_ID", "CODEX_TOOL_CALL_ID", "CODEX_WINDOWS_REGISTERED_CORE",
+    "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY",
+}
+ENVIRONMENT_FAILURES = (
+    "registered Core launch requires an installed app",
+    "app runtime provisioning service is unavailable",
+    "Failed to create unified exec process",
+)
 SCHEMA = {"type": "object", "additionalProperties": False, "required": [
     "status", "summary", "changed_files", "verification", "failure_reason"], "properties": {
     "status": {"type": "string", "enum": ["CONTINUE", "DONE", "BLOCKED", "FAILED"]},
@@ -54,10 +66,21 @@ def safe_files(paths):
             raise RuntimeError(f"Large file or potential secret: {name}")
 
 
-def run_process(command, stdin, log, timeout):
+def cli_environment():
+    env = {name: value for name, value in os.environ.items() if name.upper() not in DESKTOP_CONTEXT}
+    if os.name == "nt":
+        env["PATH"] = os.pathsep.join(
+            entry for entry in env["PATH"].split(os.pathsep)
+            if "\\windowsapps\\openai.codex" not in entry.lower()
+        )
+    return env
+
+
+def run_process(command, stdin, log, timeout, env=None):
     with log.open("wb") as output:
         process = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.PIPE,
-                                   stdout=output, stderr=subprocess.STDOUT)
+                                   stdout=output, stderr=subprocess.STDOUT,
+                                   env=env, start_new_session=os.name != "nt")
         try:
             process.communicate(stdin.encode("utf8"), timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -65,29 +88,34 @@ def run_process(command, stdin, log, timeout):
                 subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                process.kill()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             process.wait()
             raise RuntimeError(f"Process timed out after {timeout}s; see {log.relative_to(ROOT)}")
     return process.returncode
 
 
-def verify(timeout):
+def verify(timeout, run_dir):
     command = ["wsl", "-d", "AntiFlood-Probe", "--", "sh", "-lc",
                '~/.venvs/antiflood/bin/python scripts/ralph-verify.py']
     if os.name != "nt":
         command = [sys.executable, "scripts/ralph-verify.py"]
-    log = RUNTIME / "acceptance.log"
-    (RUNTIME / "acceptance.json").unlink(missing_ok=True)
+    log = run_dir / "acceptance.log"
+    report = RUNTIME / "acceptance.json"
+    if report.exists():
+        report.replace(run_dir / "previous-acceptance.json")
     code = run_process(command, "", log, timeout)
     if code:
-        raise RuntimeError(f"Independent acceptance exited {code}; see .ralph/runtime/acceptance.log")
-    evidence = json.loads((RUNTIME / "acceptance.json").read_text(encoding="utf8"))
+        raise RuntimeError(f"Independent acceptance exited {code}; see {log.relative_to(ROOT)}")
+    evidence = json.loads(report.read_text(encoding="utf8"))
     if set(evidence.get("passed", [])) != {f"A{i}" for i in range(1, 8)}:
         raise RuntimeError("Independent acceptance did not confirm every fixed criterion")
     return evidence
 
 
-def checkpoint(round_number, status, summary, verification, last_good, branch):
+def checkpoint(round_number, status, summary, verification, run_dir, branch):
     start = git("rev-parse", "HEAD")
     write(RALPH / "STATE.md", f"""# 현재 상태
 
@@ -97,9 +125,9 @@ def checkpoint(round_number, status, summary, verification, last_good, branch):
 - 검증: {verification}
 - 시작 체크포인트: {start}
 - 최신 체크포인트: 이 파일을 담은 HEAD (`git rev-parse HEAD`)
-- 마지막 정상 커밋: {('HEAD (독립 완료 검증 통과)' if status == 'DONE' else last_good)}
-- 다음 행동: {('완료. 추가 제품 작업 없이 종료.' if status == 'DONE' else '아래 이력의 장애물과 남은 완료 조건을 확인한다.')}
-- 실제 복구 해시·푸시 결과: `.ralph/runtime/checkpoints.json`. 원격 전용 브랜치: {branch}
+- 다음 행동: {('완료 조건 확인을 마쳤다.' if status == 'DONE' else '다음 독립 세션에서 가장 중요한 미완성 항목을 확인한다.')}
+- 이번 실행 로그: `{run_dir.relative_to(ROOT).as_posix()}`
+- 실제 복구 해시: `.ralph/runtime/checkpoints.json`. 작업 브랜치: {branch}
 """)
     with (RALPH / "HISTORY.md").open("a", encoding="utf8") as history:
         history.write(f"\n## 컨트롤러 라운드 {round_number}\n\n- 시작 HEAD: {start}\n"
@@ -109,35 +137,43 @@ def checkpoint(round_number, status, summary, verification, last_good, branch):
     # Inspect the exact explicit staging set before any remote mutation.
     print(json.dumps({"checkpoint_files": paths}, ensure_ascii=False), flush=True)
     git("add", "--", *paths)
-    prefix = "ralph" if status == "DONE" else "ralph-wip"
-    git("commit", "-m", f"{prefix}(round-{round_number}): {status.lower()} completion checkpoint")
+    git("commit", "-m", f"ralph(round-{round_number}): {summary.splitlines()[0][:120]}")
     latest = git("rev-parse", "HEAD")
-    if status == "DONE":
-        last_good = latest
     record = {"status": status, "round": round_number, "latest_checkpoint": latest,
-              "last_known_good": last_good, "branch": branch, "push": "pending"}
+              "last_known_good": latest, "branch": branch, "push": "local"}
     write(RUNTIME / "checkpoints.json", json.dumps(record, indent=2))
-    try:
-        git("push", "--set-upstream", "origin", f"HEAD:refs/heads/{branch}")
-        if git("ls-remote", "--heads", "origin", branch).split()[0] != latest:
-            raise RuntimeError("Remote checkpoint does not match local HEAD")
-    except Exception:
-        record.update(status="FAILED", push="failed")
-        write(RUNTIME / "checkpoints.json", json.dumps(record, indent=2))
-        raise
-    record["push"] = "success"
-    write(RUNTIME / "checkpoints.json", json.dumps(record, indent=2))
-    return last_good
+    return latest
+
+
+def run_round(command, prompt, result_path, run_dir, number, deadline, attempts, env, check_worker):
+    for attempt in range(1, attempts + 1):
+        timeout = int(deadline - time.monotonic())
+        if timeout < 1:
+            raise RuntimeError("Execution time limit reached")
+        log = run_dir / f"round-{number}-attempt-{attempt}.log"
+        result_path.unlink(missing_ok=True)
+        code = run_process(command, prompt, log, timeout, env)
+        check_worker()
+        output = "\n".join(line for line in log.read_text(encoding="utf8", errors="replace").splitlines()
+                           if line.startswith("Failed to create unified exec process:") or " ERROR codex_core::" in line)
+        for problem in ENVIRONMENT_FAILURES:
+            if problem in output:
+                raise RuntimeError(f"{problem}; see {log.relative_to(ROOT)}. Run the standalone CLI smoke test before restarting.")
+        if code == 0:
+            return json.loads(result_path.read_text(encoding="utf8"))
+        if changed() or attempt == attempts:
+            raise RuntimeError(f"Codex exited {code}; see {log.relative_to(ROOT)}")
+        print(f"Round {number}: Codex exited {code}; retrying with a fresh session", flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-rounds", type=int, default=6, choices=range(1, 7))
     parser.add_argument("--round-timeout", type=int, default=900)
-    parser.add_argument("--no-progress-limit", type=int, default=2)
-    parser.add_argument("--same-failure-limit", type=int, default=2)
+    parser.add_argument("--max-seconds", type=int, default=5400)
+    parser.add_argument("--max-attempts", type=int, default=2, choices=range(1, 4))
     args = parser.parse_args()
-    if min(args.round_timeout, args.no_progress_limit, args.same_failure_limit) < 1:
+    if min(args.round_timeout, args.max_seconds) < 1:
         parser.error("All limits must be positive")
     os.chdir(ROOT)
     RUNTIME.mkdir(exist_ok=True)
@@ -153,75 +189,65 @@ def main():
         if "- 상태: DONE" in (RALPH / "STATE.md").read_text(encoding="utf8"):
             print("DONE: recorded completion; no new CLI round requested")
             return
-        git("ls-remote", "--heads", "origin", branch)
-        cli = shutil.which("codex.cmd" if os.name == "nt" else "codex")
+        env = cli_environment()
+        cli = shutil.which("codex.cmd" if os.name == "nt" else "codex", path=env.get("PATH"))
         if not cli:
-            raise RuntimeError("Codex CLI missing")
-        subprocess.run([cli, "login", "status"], cwd=ROOT, check=True)
-        write(RUNTIME / "schema.json", json.dumps(SCHEMA))
-        guard = signatures()
-        last_good = "21f4d5387884653867edea2358dde9b18cedc49b"
-        journal = RUNTIME / "checkpoints.json"
-        first = 1
-        if journal.exists():
-            prior = json.loads(journal.read_text(encoding="utf8"))
-            if prior["latest_checkpoint"] != git("rev-parse", "HEAD") or prior["push"] != "success":
-                raise RuntimeError("Resolve prior checkpoint/push failure before restarting")
-            last_good, first = prior["last_known_good"], prior["round"] + 1
-        no_progress = same_failure = 0
-        previous_failure = ""
-        status = "MAX_ROUNDS"
-        for number in range(first, args.max_rounds + 1):
+            raise RuntimeError("Standalone Codex CLI missing from PATH")
+        deadline = time.monotonic() + args.max_seconds
+        subprocess.run([cli, "login", "status"], cwd=ROOT, env=env, check=True,
+                       timeout=min(30, args.max_seconds))
+        run_dir = RUNTIME / f"run-{time.time_ns()}"
+        run_dir.mkdir()
+        schema_path = run_dir / "schema.json"
+        write(schema_path, json.dumps(SCHEMA))
+        state = (RALPH / "STATE.md").read_text(encoding="utf8")
+        first = int(re.search(r"^- 완료 라운드: (\d+)$", state, re.M)[1]) + 1
+        print(f"Run logs: {run_dir.relative_to(ROOT)}", flush=True)
+        for number in range(first, first + args.max_rounds):
+            if time.monotonic() >= deadline:
+                print("TIME_LIMIT: configured bound reached", flush=True)
+                return
             before = git("rev-parse", "HEAD")
-            started = time.monotonic()
-            result_path = RUNTIME / f"round-{number}.json"
+            guard = signatures()
+            round_deadline = min(deadline, time.monotonic() + args.round_timeout)
+            result_path = run_dir / f"round-{number}.json"
             prompt = (RALPH / "PROMPT.md").read_text(encoding="utf8")
             prompt += f"\n현재 라운드: {number}. 시작 HEAD: {before}.\n"
             command = [cli, "-a", "never", "exec", "-m", "gpt-6.1-sol", "-c",
                        "model_reasoning_effort=medium", "-s", "workspace-write", "--color", "never",
-                       "--output-schema", str(RUNTIME / "schema.json"), "-o", str(result_path), "-"]
+                       "--output-schema", str(schema_path), "-o", str(result_path), "-"]
             print(f"Round {number}: independent gpt-6.1-sol / medium", flush=True)
-            verification = "검증 미실행"
-            try:
-                code = run_process(command, prompt, RUNTIME / f"round-{number}.log", args.round_timeout)
-                if code:
-                    raise RuntimeError(f"Codex exited {code}; see round-{number}.log")
-                if git("rev-parse", "HEAD") != before or git("branch", "--show-current") != branch or signatures() != guard:
+
+            def check_worker():
+                if (git("rev-parse", "HEAD") != before or git("branch", "--show-current") != branch
+                        or signatures() != guard):
                     raise RuntimeError("Worker changed protected controller inputs or Git checkpoint")
-                result = json.loads(result_path.read_text(encoding="utf8"))
-                if set(result) != set(SCHEMA["required"]) or result["status"] not in SCHEMA["properties"]["status"]["enum"]:
-                    raise RuntimeError("Invalid round response")
-                status, summary = result["status"], result["summary"]
-                allowed = set(result["changed_files"]) | {".ralph/STATE.md", ".ralph/HISTORY.md"}
-                if not set(changed()) <= allowed:
-                    raise RuntimeError("Undeclared worker changes; inspect before checkpoint")
-                verification = result["verification"]
-                if status == "DONE":
-                    evidence = verify(max(1, args.round_timeout - int(time.monotonic() - started)))
-                    verification += " / 독립 컨트롤러: " + json.dumps(evidence, ensure_ascii=False)
-                failure = result["failure_reason"]
-                same_failure = same_failure + 1 if failure and failure == previous_failure else int(bool(failure))
-                previous_failure = failure
-                product_changes = [p for p in changed() if not p.startswith(".ralph/")]
-                no_progress = 0 if product_changes else no_progress + 1
-                if status == "CONTINUE" and (no_progress >= args.no_progress_limit or same_failure >= args.same_failure_limit):
-                    status, summary = "BLOCKED", summary + " / 무진전 또는 동일 실패 제한 도달"
-                if status == "CONTINUE" and number == args.max_rounds:
-                    status = "MAX_ROUNDS"
-            except Exception as exc:
-                status, summary = "FAILED", str(exc)
-                verification += " / 독립 검증 실패 또는 실행 제어 오류; 성공으로 취급하지 않음"
-            # Safety violations preserve the tree for inspection, without staging/pushing it.
-            if git("rev-parse", "HEAD") != before or git("branch", "--show-current") != branch or signatures() != guard:
-                raise RuntimeError(summary)
-            last_good = checkpoint(number, status, summary, verification, last_good, branch)
-            print(json.dumps({"status": status, "round": number, "last_known_good": last_good}), flush=True)
-            if status in ("DONE", "BLOCKED", "FAILED"):
-                break
+
+            result = run_round(command, prompt, result_path, run_dir, number, round_deadline,
+                               args.max_attempts, env, check_worker)
+            status, summary = result["status"], result["summary"].strip()
+            verification = result["verification"].strip()
+            if status not in ("CONTINUE", "DONE") or result["failure_reason"]:
+                raise RuntimeError(f"Round {number} {status}: {result['failure_reason'] or summary}")
+            paths = changed()
+            if set(paths) != set(result["changed_files"]):
+                raise RuntimeError("Worker report does not match actual changed files")
+            safe_files(paths)
+            if not summary or not verification or (status == "CONTINUE" and not paths):
+                raise RuntimeError("A successful round must report its work and verification")
+            git("diff", "--check", "HEAD")
+            if status == "DONE":
+                timeout = int(round_deadline - time.monotonic())
+                if timeout < 1:
+                    raise RuntimeError("No time remains for independent acceptance")
+                evidence = verify(timeout, run_dir)
+                verification += " / 독립 컨트롤러: " + json.dumps(evidence, ensure_ascii=False)
+            latest = checkpoint(number, status, summary, verification, run_dir, branch)
+            print(json.dumps({"status": status, "round": number, "last_known_good": latest}), flush=True)
+            if status == "DONE":
+                return
         else:
             print("MAX_ROUNDS: configured bound reached", flush=True)
-        if status in ("BLOCKED", "FAILED"):
-            raise SystemExit(1)
     finally:
         lock.unlink()
 

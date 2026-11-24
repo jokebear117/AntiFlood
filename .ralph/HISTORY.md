@@ -34,3 +34,9 @@
 - 결과 범위: A1–A7은 STATE의 코드·HTTP 실행 범위에서 충족. 새 브라우저 렌더링, Windows 브라우저 창 열기, 유료 Solar 응답, 실측 수심 정확도는 이번에 검증하지 않았다. 기존 제품 소스에는 변경이 없다. 전체 Ralph 상태는 CLI 도구 장애로 BLOCKED다.
 - 검증 스크립트에서 관측한 닫힌 경계 유출 0·양수 배수와 Solar 503 조건을 명시적으로 검사하도록 보강했다. 이미 확보한 결과와 대조했으며 전체 실데이터 실행은 반복하지 않았다.
 - 다음 행동: 사용자가 독립 CLI의 Windows 런타임을 복구한 뒤 현재 깨끗한 전용 브랜치에서 `python scripts/ralph-loop.py`를 실행할 수 있다. CLI 도구 실행이 계속 불가능하다면 추가 제품 변경 없이 중단한다. main 병합·배포는 수행하지 않았다.
+
+## Windows 독립 CLI 복구
+
+- 같은 npm CLI 0.166.0에 Desktop 실행 변수를 상속했을 때 첫 셸 호출이 `registered Core launch requires an installed app`으로 실패했다. Desktop 패키지 등록은 `Ok`, 별도 Primary Runtime 패키지는 `NotAvailable`로 조회됐다. 앱 등록 상태와 독립 CLI의 프로세스 생성은 별개다.
+- Desktop의 등록 Core·패키지·도구 연결 변수를 자식 프로세스 환경에서 빼자 `workspace-write`에서 테스트 파일을 생성하고 `RALPH_WRITE_OK`를 읽은 뒤 삭제했다. 외부 확인에서도 파일이 사라져 있었다. 근거는 `.ralph/runtime/cli-inherited.log`와 `.ralph/runtime/cli-standalone.log`다. 별도의 공식 MXC 검사도 `MXC_OK`를 반환했다.
+- 재개 명령은 깨끗한 `ralph/` 브랜치에서 `python scripts/ralph-loop.py`다. 기본 한도는 실행당 6라운드, 총 90분, 라운드당 15분, 라운드당 최대 2회 CLI 시도다. 등록 Core 등 명시적인 실행 환경 오류는 즉시 멈춘다. `.ralph/runtime/run-*`의 라운드 로그와 `controller-error.json`을 확인한다. 실패한 변경은 작업 트리에 남겨 검토할 수 있다. DONE의 실데이터 확인에는 `wsl -d AntiFlood-Probe -- sh scripts/launch.sh`로 준비한 대기 상태의 서버가 필요하다.

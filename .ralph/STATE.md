@@ -1,6 +1,6 @@
 # 현재 상태
 
-- 상태: BLOCKED
+- 상태: CONTINUE
 - 완료 라운드: 1
 - 결과: 첫 독립 gpt-6.1-sol / medium 세션은 실행됐으나 도구 프로세스 생성 실패로 제품 분석을 수행하지 못했다. 외부 담당 세션은 기존 제품의 A1–A7을 아래 범위에서 확인했다. 추가 제품 변경은 없다.
 - 검증: WSL 실데이터 재생 완료, 104개 프레임, OpenMP 2스레드, 모든 생성 수심 배열의 유한값·비음수 및 수량 오차 검사 통과. 마지막 수량 오차 2.546585164964199e-11 m³. 근거는 HISTORY와 `.ralph/runtime/acceptance.json`이다.
@@ -8,7 +8,8 @@
 - 최신 체크포인트: 이 파일을 담은 HEAD (`git rev-parse HEAD`)
 - 마지막 정상 커밋: 21f4d5387884653867edea2358dde9b18cedc49b
 - 장애물: 독립 CLI에서 `registered Core launch requires an installed app`, Node 런타임에서 `app runtime provisioning service is unavailable; refusing helper fallback`. `codex doctor`는 elevated Windows sandbox provisioning이 불완전하거나 오래됐다고 보고했다. 보안·승인 설정을 변경하거나 시스템을 재설치하지 않았다.
-- 다음 행동: 독립 CLI의 Windows 실행 환경이 복구된 경우에만 `python scripts/ralph-loop.py`로 남은 최대 5회 중 다음 라운드를 시작한다. 기존 제품에 새 작업을 만들지 않는다. 현재 제품 완료 근거를 재사용하고 불필요한 전체 재검증을 피한다.
+- 다음 행동: `python scripts/ralph-loop.py --max-rounds 2`로 두 번의 독립 세션을 시작한다. 대시보드의 프레임 전환과 저장 설정 재사용 등 기존 사용자 흐름에서 가장 중요한 재현 가능한 결함을 하나씩 선택한다.
+- 환경 재검증: npm 독립 CLI에 Desktop 실행 문맥을 넘기지 않자 `workspace-write`에서 테스트 파일을 만들고 읽고 지웠다. Ralph가 새 경로에서 실제 개발을 이어 가는지는 다음 라운드에서 확인한다.
 - 실제 복구 해시·푸시 결과: `.ralph/runtime/checkpoints.json`. 원격 전용 브랜치: ralph/completion-check
 
 | 조건 | 현재 결과와 근거 |
