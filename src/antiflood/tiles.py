@@ -1,12 +1,9 @@
-"""Map cell centres to metric 100 m tiles and select cells before each physical step."""
+"""Map every valid cell to metric 100 m tiles without excluding flow regions."""
 
 import numpy as np
 from .data import CELL_M
-from .stream import RISK
-
-DRY, LOW, HALO, HIGH = range(4)
-# KEPT: already active earlier in the same 10-minute interval (set by the simulation session).
-RAIN, SLIDING, DECAY, DEPTH, NEIGHBOUR, INFLOW, KEPT = (1 << bit for bit in range(7))
+# Legacy modes remain readable in archived result files. New runs use FULL_GRID.
+DRY, LOW, HALO, HIGH, FULL_GRID = range(5)
 
 
 class TileGrid:
@@ -41,30 +38,3 @@ class TileGrid:
 
     def maximum(self, values):
         return np.maximum.reduceat(values[self.ordered_cells], self.starts)
-
-    def rain_state(self, gauge_map, rain, history):
-        gauges = gauge_map[self.ordered_cells]
-        return np.stack([
-            np.maximum.reduceat(values[gauges], self.starts)
-            for values in (rain, history.hour_mm, history.decay_mm)
-        ])
-
-    def select(self, depth, rainfall, received):
-        rain, sliding, decay = rainfall
-        maximum = self.maximum(depth)
-        reasons = np.asarray(
-            RAIN * (rain >= RISK.rain_mm)
-            + SLIDING * (sliding >= RISK.hour_mm)
-            + DECAY * (decay >= RISK.decay_mm)
-            + DEPTH * (maximum >= RISK.depth_m), dtype=np.uint8,
-        )
-        high = reasons != 0
-        adjacent = np.r_[high, False][self.padded_tile_neighbours].any(axis=1)
-        incoming = self.maximum(received) != 0
-        reasons[~high & adjacent] |= NEIGHBOUR
-        reasons[~high & incoming] |= INFLOW
-        modes = np.full(len(self.ids), DRY, dtype=np.uint8)
-        modes[(rain > 0) | (maximum > 0)] = LOW
-        modes[adjacent | incoming] = HALO
-        modes[high] = HIGH
-        return modes, reasons

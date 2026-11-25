@@ -394,7 +394,7 @@ function renderLayerLegend() {
   key.replaceChildren();
   renderScale();
   const entries = {
-    active: [["Dry","#8c9ba8"],["Low Risk","#f6c24a"],["Halo","#e06624"],["High Risk","#b43626"]],
+    active: [["Dry","#8c9ba8"],["Low Risk","#f6c24a"],["Halo","#e06624"],["High Risk","#b43626"],["전체 격자 계산","#1e89d2"]],
     difference: [["−5cm 이하","#164fb1"],["−5cm ~ −1mm","#55a4d5"],["+1mm ~ +5cm","#f49851"],["+5cm 이상","#b83a1b"]],
     observed: [["2022년 8월 8~9일 서울시 침수흔적도","#8e2366"]],
   }[layer] ?? [];
@@ -561,7 +561,7 @@ async function showPoint(point, frame = shownFrame) {
     const result = await api("/api/frames/" + frame.id + "/point?" + search);
     if (version !== pointVersion) return;
     el("point-reading").textContent = `${modeName(frame.mode)} 모의 수심 ${num(result.depth_m*1000, 1)} mm` + (result.reference_depth_m == null ? "" : ` / Reference ${num(result.reference_depth_m*1000, 1)} mm`) + (drainInfo ? `\n배수능력 ${num(drainInfo.drain_mm_h)} mm/h (추정·가정값)` : "");
-    const mode = ["Dry","Low Risk","Halo","High Risk"][result.tile_mode];
+    const mode = ["Dry","Low Risk","Halo","High Risk","전체 격자 계산"][result.tile_mode];
     if (mode) {
       const reasons = ["10분 강우","60분 누적","감쇠 점수","잔류 수심","고위험 Tile 인접","이전 단계 유입","이번 10분 구간에 이미 활성"]
         .filter((_,bit) => result.reasons & (1 << bit));
@@ -572,7 +572,9 @@ async function showPoint(point, frame = shownFrame) {
       el("point").textContent =
         "Tile " + result.tile_id + " · " + mode + " · " +
         (result.active ? "수평 유동 계산" : (mode === "Dry" ? "건조 상태" : "강우·배수만 계산")) +
-        "\n선택 조건 " + (reasons.join(", ") || "활성 기준 미달") + " · 마지막 수평 유동 " + last +
+        (result.calculation_policy === "full_grid_synchronous" ?
+          "\n전체 격자 동기 계산 · 마지막 간격 " + num(result.last_step_seconds, 2) + "초 · 마지막 수평 유동 " + last :
+          "\n선택 조건 " + (reasons.join(", ") || "활성 기준 미달") + " · 마지막 수평 유동 " + last) +
         "\n관측소별 최댓값  10분 " + num(result.rain_interval_mm) + " mm / 60분 " + num(result.sliding_mm) +
         " mm / 감쇠 " + num(result.decaying_mm) + " mm" +
         "\nReference " + (ref == null ? "자료 없음" : num(ref*1000,2) + " mm") +

@@ -96,3 +96,10 @@
 기존 5개 파일 변경은 사용자 로컬 커밋 승인에 따라 ralph/adaptive-time-stepping의 ac0b20d에 보존했다. 과거 GOAL/STATE/PROMPT는 runtime/pre-adaptive-*.md에 복사했다. 새 목표를 위해 STATE의 이전 DONE과 라운드 수를 초기화했다. 기본 6라운드, 900초/라운드, 5400초/실행, 최대 2회 시도를 유지하며 원격 푸시는 승인받지 않았다.
 
 읽기 전용 search-first 조사에서 기존 Tile 집계, OpenMP/WCA2D, 10분 저장과 RMSE/IoU 비교를 재사용할 수 있음을 확인했다. 전체 강우 상주는 data.load_scenarios와 Scenario.intervals에서 발생한다. 기존 유출 부피의 비례 재사용에는 안전 근거가 없다. Sliding Window는 현재 UI에 용도가 있으므로 명확히 구분해 정리한다. 현재 목표의 구현과 성능은 아직 검증하지 않았다.
+
+## 컨트롤러 라운드 1
+
+- 시작 HEAD: d159f2628e9fc4a79fba46c20ffd604a1d85a996
+- 상태: CONTINUE
+- 결과: G02·G03: 위험도 선택 분기를 제거하고 모든 유효 셀의 수평 유동을 매 단계 계산하도록 변경했어. G01: 기존 Reference 커널과 시간 간격을 보존했고 작은 격자에서 시작 HEAD와 결과가 일치했어. 계산 정책·마지막 간격 저장과 표시도 추가했어. G04–G16의 최종 검증은 남아 있으며, 특히 강우 스트리밍과 지역별 다중 주기는 미구현이야. 다음 작업은 Scenario·Replay·비교 해시의 전체 강우 보관 제거야.
+- 검증: 39셀 직렬 네이티브 시험에서 닫힌·열린 경계, 질량 보존, 비음수·유한값, 무강우 지역 유입, 강우 종료 후 이동·배수, 공통 시각을 확인했어. 최대 수량 오차 약 2.14e-14 m³, 시작 HEAD Reference 대비 수심 배열 일치. Python 구문·JS 구문·git diff --check 통과. 증거: .ralph/runtime/round1-full-grid.json, 재개 기록·명령·G별 상태: .ralph/runtime/round1-status.json. WSL은 E_ACCESSDENIED로 재시도하지 않았고, Windows Rasterio DLL 차단·libgomp 부재로 데이터 로더를 격리한 직렬 시험만 수행했어. 실데이터·OpenMP·브라우저·성능·최종 독립 검증은 미실행. 외부 확인 명령(저장소 루트): wsl -d AntiFlood-Probe -- sh -lc '~/.venvs/antiflood/bin/python scripts/check-full-grid.py'. 기존 서버·원본·저장 결과·보호 파일은 변경하지 않았어.

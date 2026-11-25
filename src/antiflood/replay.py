@@ -178,6 +178,7 @@ class Replay:
             "settings": self.settings,
             "status": "running",
             "mode": mode,
+            "calculation_policy": "full_grid_synchronous",
             "conditions": conditions,
             "reference_id": reference.name if reference else None,
             "map": self.rasters.metadata(),
@@ -268,6 +269,8 @@ class Replay:
         frame = {
             "id": frame_id,
             "mode": session.mode,
+            "calculation_policy": "full_grid_synchronous",
+            "last_step_seconds": session.last_step_seconds,
             "time": utc(session.time),
             "rain_observed_at": utc(session.interval.observed_at),
             "rain_interval_mm": session.interval.gauge_mm.tolist(),

@@ -1,15 +1,11 @@
 # 현재 상태
 
 - 상태: CONTINUE
-- 완료 라운드: 0
-- 목표: 전체 격자 지속 계산, 순차 강우 입력과 요약, 지역별 적응형 주기, 보존적 경계 전달, 실제 비교 및 UI와 문서.
-- G01: PENDING. 기존 Reference 분기는 확인했으나 새 변경 후 보존 여부 검증 전이다.
-- G02–G07: PENDING. 현재 위험도 선택, 전체 강우 보관, 다중 주기 경계 미구현이다.
-- G08–G11: PENDING. 기존 실행·OpenMP·10분 저장·대시보드는 있으나 새 연결과 검증이 필요하다.
-- G12: PENDING. 기존 선택적 방식의 측정을 재사용하지 않는다.
-- G13–G14: PENDING. 구현 후 고정 README 구조를 지키며 문서와 아키텍처 이미지를 갱신한다.
-- G15–G16: PENDING. Windows/WSL 경로와 기존 자료를 유지하고 최종 확인한다.
-- 보존 체크포인트: ac0b20d (승인받은 기존 5개 파일의 전용 브랜치 로컬 커밋).
-- 이전 GOAL/STATE/PROMPT 사본: .ralph/runtime/pre-adaptive-*.md. 과거 HISTORY는 보존했다.
-- 다음 행동: 전체 격자 지속 계산과 Reference를 보존하는 최소 변경부터 구현한다. 강우 소유 구조는 data.load_scenarios, Scenario.intervals, Replay, comparison.run_conditions를 함께 점검한다.
-- 실행: python scripts/ralph-loop.py. 기본 6라운드·900초/라운드·5400초/실행·최대 2회 시도. 자동 새 실행과 원격 푸시 금지.
+- 완료 라운드: 1
+- 결과: G02·G03: 위험도 선택 분기를 제거하고 모든 유효 셀의 수평 유동을 매 단계 계산하도록 변경했어. G01: 기존 Reference 커널과 시간 간격을 보존했고 작은 격자에서 시작 HEAD와 결과가 일치했어. 계산 정책·마지막 간격 저장과 표시도 추가했어. G04–G16의 최종 검증은 남아 있으며, 특히 강우 스트리밍과 지역별 다중 주기는 미구현이야. 다음 작업은 Scenario·Replay·비교 해시의 전체 강우 보관 제거야.
+- 검증: 39셀 직렬 네이티브 시험에서 닫힌·열린 경계, 질량 보존, 비음수·유한값, 무강우 지역 유입, 강우 종료 후 이동·배수, 공통 시각을 확인했어. 최대 수량 오차 약 2.14e-14 m³, 시작 HEAD Reference 대비 수심 배열 일치. Python 구문·JS 구문·git diff --check 통과. 증거: .ralph/runtime/round1-full-grid.json, 재개 기록·명령·G별 상태: .ralph/runtime/round1-status.json. WSL은 E_ACCESSDENIED로 재시도하지 않았고, Windows Rasterio DLL 차단·libgomp 부재로 데이터 로더를 격리한 직렬 시험만 수행했어. 실데이터·OpenMP·브라우저·성능·최종 독립 검증은 미실행. 외부 확인 명령(저장소 루트): wsl -d AntiFlood-Probe -- sh -lc '~/.venvs/antiflood/bin/python scripts/check-full-grid.py'. 기존 서버·원본·저장 결과·보호 파일은 변경하지 않았어.
+- 시작 체크포인트: d159f2628e9fc4a79fba46c20ffd604a1d85a996
+- 최신 체크포인트: 이 파일을 담은 HEAD (`git rev-parse HEAD`)
+- 다음 행동: 다음 독립 세션에서 가장 중요한 미완성 항목을 확인한다.
+- 이번 실행 로그: `.ralph/runtime/run-1795577539881292900`
+- 실제 복구 해시: `.ralph/runtime/checkpoints.json`. 작업 브랜치: ralph/adaptive-time-stepping

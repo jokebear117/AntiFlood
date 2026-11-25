@@ -78,7 +78,8 @@ def saved_point(directory, stem, longitude, latitude):
     mapping = directory / "gauge_map.npy"
     tile_path = directory / "tile_map.npy"
     index = None
-    detail = {}
+    detail = {"calculation_policy": frame.get("calculation_policy"),
+              "last_step_seconds": frame.get("last_step_seconds")}
     if tile_path.is_file():
         tile_map = np.load(tile_path, mmap_mode="r")
         index = tile_map[row, col]

@@ -12,7 +12,7 @@ from numpy.ctypeslib import ndpointer
 
 from .data import CELL_M, ROOT
 from .stream import RainHistory
-from .tiles import HALO, INFLOW, KEPT, TileGrid
+from .tiles import FULL_GRID, TileGrid
 
 
 class NativeEngine:
@@ -58,15 +58,13 @@ class SimulationSession:
         self.outflow = np.empty((self.depth.size, 4))
         # rain, drain, boundary outflow (m3), inactive cells that received inflow, deepest cell (m)
         self.budget = np.zeros(5)
-        self.reselect = True
-        self.kept = None
-        self.selections = self.additions = 0
-        self.inflow = False
-        self.active_cells = np.empty(0, dtype=np.int32)
         self.rain_m3 = self.drain_m3 = self.boundary_outflow_m3 = 0.0
         self.threads = threads
         self.worker_count = self.cell_steps = self.active_cell_count = 0
-        self.active_tiles = np.empty(0, dtype=np.int32)
+        self.active_tiles = np.arange(len(tiles.ids))
+        self.tile_modes = np.full(len(tiles.ids), FULL_GRID, dtype=np.uint8)
+        self.tile_reasons = np.zeros(len(tiles.ids), dtype=np.uint8)
+        self.last_step_seconds = 0.0
         self.mode = mode
         self.received = np.zeros(self.depth.size, dtype=np.uint8)
         self.selected = np.ascontiguousarray(tiles.valid, dtype=np.uint8)
@@ -87,65 +85,15 @@ class SimulationSession:
         self.rain[cells] = interval.gauge_mm[region] / (1_000 * self.remaining)
         if self.mode == "streaming":
             self.history.add(interval.gauge_mm)
-            self.tile_rain = self.tiles.rain_state(self.gauge_map, interval.gauge_mm, self.history)
-            self.reselect = True
-            self.kept = None
         self.max_rain_rate = self.rain.max()
 
     def advance_step(self):
         if not self.remaining:
             raise ValueError("계산할 강우 구간이 없습니다.")
         valid = self.tiles.cells
-        if self.mode == "streaming":
-            # Rain and the windows change only with a new 10-minute input, so the full tile scan
-            # runs once per input. Within an interval an inactive tile needs horizontal flow only
-            # after water flows into it; the engine reports that, and only the tiles that received
-            # water are added. Tiles stay active until the interval ends, so the active area only
-            # grows and its edge does not flicker on and off.
-            if self.reselect:
-                self.tile_modes, self.tile_reasons = self.tiles.select(self.depth, self.tile_rain, self.received)
-                active = self.tile_modes >= HALO
-                if self.kept is not None:
-                    held = self.kept & ~active
-                    self.tile_modes[held] = HALO
-                    self.tile_reasons[held] |= KEPT
-                    active |= self.kept
-                self.kept = active
-                self.active_tiles = np.flatnonzero(active)
-                self.selected[valid] = active[self.tiles.valid_tiles]
-                self.active_cells = valid[self.selected[valid] != 0]
-                # A mask avoids sorting; flatnonzero returns the cells in memory order.
-                self.receiver_mask = self.selected.astype(bool)
-                around = self.tiles.neighbours[self.active_cells].ravel()
-                self.receiver_mask[around[around >= 0]] = True
-                self.receivers = np.flatnonzero(self.receiver_mask).astype(np.int32)
-                # Flags outside the new receiver set would go stale; the engine rewrites the rest.
-                self.received[:] = 0
-                self.selections += 1
-                self.reselect = self.inflow = False
-            elif self.inflow:
-                wet = np.flatnonzero(self.received)
-                added = np.unique(self.tiles.by_cell[wet])
-                added = added[~self.kept[added]]
-                if added.size:
-                    self.kept[added] = True
-                    self.tile_modes[added] = HALO
-                    self.tile_reasons[added] |= INFLOW
-                    self.active_tiles = np.flatnonzero(self.kept)
-                    members = np.concatenate([self.tiles.members[tile] for tile in added])
-                    self.selected[members] = 1
-                    self.active_cells = np.concatenate((self.active_cells, members))
-                    around = self.tiles.neighbours[members].ravel()
-                    self.receiver_mask[members] = True
-                    self.receiver_mask[around[around >= 0]] = True
-                    self.receivers = np.flatnonzero(self.receiver_mask).astype(np.int32)
-                self.received[wet] = 0
-                self.additions += 1
-                self.inflow = False
-            cells, receivers = self.active_cells, self.receivers
-        else:
-            self.active_tiles = np.arange(len(self.tiles.ids))
-            cells = receivers = valid
+        # Every valid cell sends and receives on the same physical clock. Regional
+        # time stepping will replace this baseline only after boundary validation.
+        cells = receivers = valid
         self.active_cell_count = cells.size
         self.cell_steps += cells.size
         # Both policies use the full grid for the same CFL bound.
@@ -163,8 +111,7 @@ class SimulationSession:
         self.rain_m3 += self.budget[0]
         self.drain_m3 += self.budget[1]
         self.boundary_outflow_m3 += self.budget[2]
-        if self.budget[3] > 0:
-            self.inflow = True
+        self.last_step_seconds = dt
         self.elapsed += dt
         self.last_update[self.active_tiles] = self.elapsed
         self.remaining = max(0.0, self.remaining - dt)
