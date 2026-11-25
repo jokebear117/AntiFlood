@@ -278,8 +278,10 @@ class Replay:
         frame = {
             "id": frame_id,
             "mode": session.mode,
-            "calculation_policy": "full_grid_synchronous",
+            "calculation_policy": session.calculation_policy,
             "last_step_seconds": session.last_step_seconds,
+            "tile_step_min_seconds": float(session.tile_step_seconds.min()),
+            "tile_step_max_seconds": float(session.tile_step_seconds.max()),
             "time": utc(session.time),
             "rain_observed_at": utc(session.interval.observed_at),
             "rain_interval_mm": session.interval.gauge_mm.tolist(),
@@ -308,6 +310,7 @@ class Replay:
                 "tile_modes": session.tile_modes,
                 "tile_reasons": session.tile_reasons,
                 "last_update": session.last_update.astype(np.float32),
+                "tile_step_seconds": session.tile_step_seconds.astype(np.float32),
             }
         compared = 0.0
         if reference:

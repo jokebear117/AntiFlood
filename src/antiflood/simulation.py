@@ -1,6 +1,7 @@
 """Keep one continuous depth grid and advance it with the native WCA2D kernel."""
 
 import ctypes
+import math
 from datetime import timedelta
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import numpy as np
 from numpy.ctypeslib import ndpointer
 
 from .data import CELL_M, ROOT
-from .stream import RainHistory
+from .stream import RISK, RainHistory
 from .tiles import FULL_GRID, TileGrid
 
 
@@ -50,7 +51,7 @@ class SimulationSession:
         self.grid = grid
         self.tiles = tiles
         self.engine = engine
-        self.gauge_map = gauge_map.ravel()
+        self.gauge_map = np.ascontiguousarray(gauge_map.ravel(), dtype=np.int32)
         self.history = RainHistory(gauge_count)
         self.depth = np.zeros(grid.valid.size)
         self.maximum_depth = np.zeros_like(self.depth)
@@ -74,6 +75,67 @@ class SimulationSession:
         self.interval = None
         self.remaining = 0.0
         self.manning = 0.04
+        self.synchronization_seconds = 60.0
+        self.tile_step_seconds = np.zeros(len(tiles.ids))
+        self._slab_remaining = 0.0
+        self._fine_steps = 0
+
+    @property
+    def calculation_policy(self):
+        return "full_grid_synchronous" if self.mode == "reference" else "dry_tile_temporal_blocking"
+
+    def _start_slab(self):
+        # WCA2D's velocity cap (10 m/s) gives a minimum CFL step of 1.5 s
+        # on the retained 30 m grid. One final partial step is allowed. The
+        # dependency cone therefore bounds every possible wetting front, without
+        # predicting a flux or scaling an old donor volume.
+        if not 0 < self.synchronization_seconds <= 60:
+            raise ValueError("Regional synchronization period must be in (0, 60] seconds")
+        horizon = min(self.remaining, self.synchronization_seconds)
+        self._cone_radius = math.ceil(horizon / (0.5 * CELL_M / 10.0)) + 1
+        valid = self.tiles.cells
+        # Existing sparse neighbours and NumPy suffice for this bounded breadth
+        # first expansion. Decay only requests more work; it removes no water.
+        wet = ((self.depth[valid] > 0) | (self.rain[valid] > 0)
+               | (self.history.decay_mm[self.gauge_map[valid]] >= RISK.decay_mm))
+        reached = np.zeros(self.depth.size, dtype=bool)
+        frontier = valid[wet]
+        reached[frontier] = True
+        for _ in range(self._cone_radius):
+            if not frontier.size:
+                break
+            adjacent = self.tiles.neighbours[frontier].ravel()
+            adjacent = adjacent[adjacent >= 0]
+            frontier = np.unique(adjacent[~reached[adjacent]])
+            reached[frontier] = True
+        fast = np.zeros(len(self.tiles.ids), dtype=np.uint8)
+        fast[self.tiles.by_cell[valid[reached[valid]]]] = 1
+        self._fast_tiles = np.flatnonzero(fast)
+        self._slow_tiles = np.flatnonzero(fast == 0)
+        self._fast_cells = np.ascontiguousarray(self.tiles.cells[fast[self.tiles.valid_tiles] != 0])
+        self._slow_cells = np.ascontiguousarray(self.tiles.cells[fast[self.tiles.valid_tiles] == 0])
+        self._slab_duration = self._slab_remaining = horizon
+        self._slab_end_remaining = self.remaining - horizon
+        self._slab_end_elapsed = self.elapsed + horizon
+        self._fine_steps = 0
+        self.budget[4] = self.depth.max()
+
+    def _native_step(self, cells, tile_ids, dt):
+        self.selected.fill(0)
+        self.selected[cells] = 1
+        team = self.engine.step(
+            self.grid.elevation, self.grid.boundary_elevation, self.depth, self.rain, self.grid.drain,
+            self.tiles.neighbours, cells, cells.size, cells, self.selected, cells.size,
+            cells, cells.size,
+            CELL_M, dt, self.manning, self.threads, self.outflow, self.budget, self.received,
+            self.maximum_depth,
+        )
+        self.cell_steps += cells.size
+        self.worker_count = max(team, self.worker_count)
+        self.rain_m3 += self.budget[0]
+        self.drain_m3 += self.budget[1]
+        self.boundary_outflow_m3 += self.budget[2]
+        self.tile_step_seconds[tile_ids] = dt
 
     def set_rain(self, interval):
         if interval.start != self.time or self.remaining > 0:
@@ -91,8 +153,9 @@ class SimulationSession:
         if not self.remaining:
             raise ValueError("계산할 강우 구간이 없습니다.")
         valid = self.tiles.cells
-        # Every valid cell sends and receives on the same physical clock. Regional
-        # time stepping will replace this baseline only after boundary validation.
+        if self.mode == "streaming":
+            return self._advance_regional()
+        # Preserve the original synchronous Reference kernel and CFL formula.
         cells = receivers = valid
         self.active_cell_count = cells.size
         self.cell_steps += cells.size
@@ -114,7 +177,42 @@ class SimulationSession:
         self.last_step_seconds = dt
         self.elapsed += dt
         self.last_update[self.active_tiles] = self.elapsed
+        self.tile_step_seconds[:] = dt
         self.remaining = max(0.0, self.remaining - dt)
+        self.time = self.interval.end - timedelta(seconds=self.remaining)
+        return self.remaining == 0
+
+    def _advance_regional(self):
+        if self._slab_remaining == 0:
+            self._start_slab()
+        max_depth = self.budget[4] + self.max_rain_rate * 15
+        speed = min(10.0, 3.132 * np.sqrt(max_depth))
+        dt = min(self._slab_remaining, 15.0, 0.5 * CELL_M / max(speed, 1.0))
+        if self._fast_cells.size:
+            self._fine_steps += 1
+            if self._fine_steps >= self._cone_radius:
+                raise RuntimeError("Regional dependency cone exhausted before synchronization")
+            self._native_step(self._fast_cells, self._fast_tiles, dt)
+        else:
+            dt = self._slab_remaining
+        self.elapsed += dt
+        self.last_update[self._fast_tiles] = self.elapsed
+        self._slab_remaining = max(0.0, self._slab_remaining - dt)
+        if self._slab_remaining == 0:
+            self.elapsed = self._slab_end_elapsed
+            self.last_update[self._fast_tiles] = self.elapsed
+        if self._slab_remaining == 0 and self._slow_cells.size:
+            # These cells have no source and cannot receive a message during
+            # this slab. Their exact solution is zero, but they still execute
+            # the same source/drain/outflow kernel once on their longer clock.
+            if np.any(self.depth[self._slow_cells]) or np.any(self.rain[self._slow_cells]):
+                raise RuntimeError("Deferred tile is no longer hydraulically isolated")
+            self._native_step(self._slow_cells, self._slow_tiles, self._slab_duration)
+            self.last_update[self._slow_tiles] = self.elapsed
+        self.last_step_seconds = dt
+        self.active_cell_count = self.tiles.cells.size
+        self.remaining = (self._slab_end_remaining if self._slab_remaining == 0
+                          else max(0.0, self.remaining - dt))
         self.time = self.interval.end - timedelta(seconds=self.remaining)
         return self.remaining == 0
 
