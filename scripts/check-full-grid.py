@@ -4,6 +4,8 @@ Run from the repository root with the prepared Python environment:
     python scripts/check-full-grid.py
 ANTIFLOOD_ENGINE may point to a separate build to preserve the serving library.
 These checks do not validate regional time stepping or benchmark performance.
+The adaptive session uses a 15-second synchronization horizon to recover the
+shared clock on this shallow fixture. check-regional.py covers longer clocks.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -35,6 +37,7 @@ def check(engine, boundary):
     start = datetime(2022, 8, 8, tzinfo=timezone.utc)
     sessions = [SimulationSession(grid, tiles, engine, gauges, 2, start, 4, mode)
                 for mode in ("reference", "streaming")]
+    sessions[1].synchronization_seconds = 15.0
     snapshots = []
     initial_wet = None
     for index, amounts in enumerate(([0.0, 2.0], [0.0, 0.0], [0.0, 0.0])):

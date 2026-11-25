@@ -33,7 +33,8 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": [
     "status", "summary", "changed_files", "verification", "failure_reason"], "properties": {
     "status": {"type": "string", "enum": ["CONTINUE", "DONE", "BLOCKED", "FAILED"]},
     "summary": {"type": "string"}, "changed_files": {"type": "array", "items": {"type": "string"}},
-    "verification": {"type": "string"}, "failure_reason": {"type": "string"}}}
+    "verification": {"type": "string"}, "failure_reason": {
+        "type": "string", "description": "Must be empty for CONTINUE/DONE. Put non-blocking limitations in verification. Only BLOCKED/FAILED have a failure_reason."}}}
 
 
 def git(*args):

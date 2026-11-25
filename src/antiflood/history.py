@@ -80,6 +80,8 @@ def saved_point(directory, stem, longitude, latitude):
     index = None
     detail = {"calculation_policy": frame.get("calculation_policy"),
               "last_step_seconds": frame.get("last_step_seconds")}
+    if frame.get("calculation_policy") == "full_grid_synchronous":
+        detail["tile_step_seconds"] = frame.get("last_step_seconds")
     if tile_path.is_file():
         tile_map = np.load(tile_path, mmap_mode="r")
         index = tile_map[row, col]
@@ -94,6 +96,8 @@ def saved_point(directory, stem, longitude, latitude):
                 max_tile_depth_m=float(depth[window][members].max()),
                 gauge_indices=gauge_indices.tolist(),
             )
+            if "tile_step_seconds" in arrays:
+                detail["tile_step_seconds"] = float(arrays["tile_step_seconds"][index])
         ref_id = info.get("reference_id")
         if ref_id and frame.get("reference_frame_id") == f"{ref_id}_{stem}":
             ref = float(load_depth(directory.parent / ref_id, stem)[row, col])

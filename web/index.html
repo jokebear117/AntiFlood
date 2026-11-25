@@ -36,7 +36,7 @@
           <section class="map-panel" aria-labelledby="streaming-title">
             <div class="map-shell">
               <div id="map" aria-label="Streaming 수심 지도"></div>
-              <span class="map-badge" id="streaming-title">Streaming <small>선택적 갱신</small></span>
+              <span class="map-badge" id="streaming-title">Streaming <small>지역별 계산</small></span>
               <p id="map-loading" class="map-message" role="status">지형을 불러오는 중</p>
               <p id="streaming-empty" class="map-message" hidden>Streaming 결과 대기</p>
               <p id="map-error" class="map-message" role="alert" hidden></p>
@@ -51,7 +51,7 @@
         <details class="float layer-panel map-tools"><summary>레이어</summary><div class="tool-options">
           <span class="float-title">결과</span>
           <button type="button" data-layer="depth" aria-pressed="true">수심</button>
-          <button type="button" data-layer="active" aria-pressed="false">활성 Tile</button>
+          <button type="button" data-layer="active" aria-pressed="false">계산 간격</button>
           <button type="button" data-layer="difference" aria-pressed="false">수심 오차</button>
           <button type="button" data-layer="observed" aria-pressed="false">침수흔적도</button>
           <span class="float-title">입력</span>
@@ -119,8 +119,8 @@
       <section id="analysis-panel" class="panel-content" hidden>
         <label for="analysis-kind">분석 항목</label>
         <select id="analysis-kind"><option value="rain">강우와 수심</option><option value="performance">계산 성능과 오차</option></select>
-        <dl class="analysis-metrics" id="analysis-metrics" hidden>          <div><dt>활성 계산 셀</dt><dd id="cells">—</dd></div>
-          <div><dt>활성 Tile</dt><dd id="tiles">—</dd></div>
+        <dl class="analysis-metrics" id="analysis-metrics" hidden>          <div><dt>계산 셀</dt><dd id="cells">—</dd></div>
+          <div><dt>계산 Tile</dt><dd id="tiles">—</dd></div>
           <div><dt>갱신 지연</dt><dd id="latency">미측정</dd></div>
           <div><dt>계산 속도 배율</dt><dd id="speedup">미측정</dd></div>
           <div><dt>계산량 감소율</dt><dd id="reduction">미측정</dd></div>

@@ -13,3 +13,5 @@ WSL은 AntiFlood-Probe와 ~/.venvs/antiflood를 사용한다. 8000 포트의 서
 GOAL, PROMPT, 컨트롤러, 독립 검증 스크립트, AGENTS, .gitignore, 두 사용자 명세는 보호 파일이다. 라운드에서 수정하지 않는다. STATE와 HISTORY도 읽기 전용이며 컨트롤러가 기록한다. Git 커밋·푸시·브랜치 전환·배포는 하지 않는다. 기존 사용자 변경은 ac0b20d에 보존되어 있다. 새 연구와 무관한 디자인 변경, 비밀·인증 파일 조회, 한도 및 승인 절차 완화는 하지 않는다.
 
 라운드 종료 summary와 verification에는 실제 변경, G별 상태와 근거, 다음 작업을 담는다. 컨트롤러가 STATE와 HISTORY에 남기므로 재개 가능한 경로와 명령을 포함한다. 최종 JSON은 status(CONTINUE/DONE/BLOCKED/FAILED), summary, changed_files(상대 경로), verification, failure_reason 필드를 쓴다. 진행 가능한 미완료 작업이 있으면 CONTINUE, 근본적인 장애만 BLOCKED로 보고한다. 핵심 알고리즘이 미구현이면 DONE으로 응답하지 않는다.
+
+CONTINUE와 DONE의 failure_reason은 빈 문자열로 쓴다. 진행을 막지 않는 환경 제한과 미실행 검증은 verification에 기록한다. failure_reason에 값이 있으면 컨트롤러는 해당 라운드를 실패로 거절한다. BLOCKED와 FAILED일 때만 실제 중단 원인을 그 필드에 기록한다.

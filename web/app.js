@@ -245,6 +245,8 @@ function renderState(state) {
 }
 
 function renderFrameDetails(frame) {
+  el("streaming-title").querySelector("small").textContent = frame && !hasPeriods(frame)
+    ? "선택적 갱신 (이전 방식)" : "지역별 계산";
   el("frame-time").textContent = frame ? formatTime(frame.time) : "저장된 결과 없음";
   el("depth").textContent = frame ? `${frame.max_depth_m.toFixed(3)} m` : "—";
   el("rain").textContent = frame ? `${frame.rain_max_mm.toFixed(1)} mm` : "—";
@@ -310,6 +312,8 @@ function updateTimeline() {
 const num = (value, digits = 1) => Number(value).toLocaleString("ko-KR", {maximumFractionDigits: digits});
 const percent = (value) => value == null ? "미측정" : num(value * 100) + "%";
 const modeName = (mode) => mode === "reference" ? "Reference" : "Streaming";
+const hasPeriods = (frame) => ["subthreshold_tile_temporal_blocking", "dry_tile_temporal_blocking", "full_grid_synchronous"]
+  .includes(frame?.calculation_policy);
 const readyMaps = () => [mapReady && map, referenceReady && referenceMap].filter(Boolean);
 const timelineFrames = () => referenceFrames.length > frames.length ? referenceFrames : frames;
 
@@ -388,13 +392,17 @@ function addKey(target, label, color) {
   target.append(item);
 }
 
-function renderLayerLegend() {
+function renderLayerLegend(frame = shownFrame) {
   const key = el("layer-key");
   key.hidden = layer === "depth" || layer === "drainage";
   key.replaceChildren();
   renderScale();
+  const periods = !frame || hasPeriods(frame);
+  document.querySelector('[data-layer="active"]').textContent = periods ? "계산 간격" : "활성 Tile";
   const entries = {
-    active: [["Dry","#8c9ba8"],["Low Risk","#f6c24a"],["Halo","#e06624"],["High Risk","#b43626"],["전체 격자 계산","#1e89d2"]],
+    active: periods
+      ? [["마지막 간격 ≤15초","#1e89d2"],["15초 초과 ~ 30초","#f6c24a"],["30초 초과","#e06624"]]
+      : [["Dry","#8c9ba8"],["Low Risk","#f6c24a"],["Halo","#e06624"],["High Risk","#b43626"],["전체 격자 계산","#1e89d2"]],
     difference: [["−5cm 이하","#164fb1"],["−5cm ~ −1mm","#55a4d5"],["+1mm ~ +5cm","#f49851"],["+5cm 이상","#b83a1b"]],
     observed: [["2022년 8월 8~9일 서울시 침수흔적도","#8e2366"]],
   }[layer] ?? [];
@@ -428,7 +436,7 @@ async function selectFrame(index, force = false) {
     }
     return;
   }
-  renderLayerLegend();
+  renderLayerLegend(shown);
   if (!mapReady) {
     renderFrameDetails(shown);
     return;
@@ -436,8 +444,11 @@ async function selectFrame(index, force = false) {
   const version = ++viewVersion;
   pendingFrame = key;
   try {
-    const refUrl = ref && "/api/frames/" + ref.id + ".png";
-    const suffix = layer === "active" || layer === "difference" ? "?layer=" + layer : "";
+    const periodLayer = layer === "active" && hasPeriods(shown);
+    const refUrl = ref && (!periodLayer || hasPeriods(ref)) &&
+      "/api/frames/" + ref.id + ".png" + (periodLayer ? "?layer=period" : "");
+    const suffix = periodLayer ? "?layer=period" :
+      layer === "active" || layer === "difference" ? "?layer=" + layer : "";
     const streamUrl = stream && (layer !== "difference" || stream.reference_frame_id) &&
       (layer !== "active" || stream.mode === "streaming") && "/api/frames/" + stream.id + ".png" + suffix;
     const observation = layer === "observed";
@@ -481,7 +492,8 @@ async function selectFrame(index, force = false) {
     }
     el("reference-empty").hidden = Boolean(refImage) || observation;
     el("streaming-empty").hidden = Boolean(streamImage) || observation;
-    el("reference-empty").textContent = "이 시각에 Reference 결과가 없습니다";
+    el("reference-empty").textContent = periodLayer && ref && !hasPeriods(ref)
+      ? "이 Reference에는 계산 간격 기록이 없습니다" : "이 시각에 Reference 결과가 없습니다";
     el("streaming-empty").textContent = stream && layer === "difference" ? "같은 시각의 Reference 결과가 필요합니다" :
       "이 시각에 Streaming 결과가 없습니다";
     shownFrame = shown;
@@ -562,25 +574,30 @@ async function showPoint(point, frame = shownFrame) {
     if (version !== pointVersion) return;
     el("point-reading").textContent = `${modeName(frame.mode)} 모의 수심 ${num(result.depth_m*1000, 1)} mm` + (result.reference_depth_m == null ? "" : ` / Reference ${num(result.reference_depth_m*1000, 1)} mm`) + (drainInfo ? `\n배수능력 ${num(drainInfo.drain_mm_h)} mm/h (추정·가정값)` : "");
     const mode = ["Dry","Low Risk","Halo","High Risk","전체 격자 계산"][result.tile_mode];
-    if (mode) {
+    if (mode || hasPeriods(result)) {
       const reasons = ["10분 강우","60분 누적","감쇠 점수","잔류 수심","고위험 Tile 인접","이전 단계 유입","이번 10분 구간에 이미 활성"]
         .filter((_,bit) => result.reasons & (1 << bit));
       const start = Date.parse(currentRun?.scenario.start);
       const last = result.last_update_seconds < 0 || !Number.isFinite(start) ? "기록 없음" :
         formatTime(start + result.last_update_seconds * 1000);
       const ref = result.reference_depth_m;
+      const calculation = hasPeriods(result)
+        ? " · 전체 격자 계산\n" + (result.calculation_policy === "full_grid_synchronous" ? "동기 계산" : "지역별 적응형 계산") +
+          " · 이 Tile의 마지막 간격 " + (result.tile_step_seconds == null ? "기록 없음" : num(result.tile_step_seconds, 2) + "초") +
+          " · 계산 시각 " + formatTime(result.time)
+        : " · " + mode + " · " +
+          (result.active ? "수평 유동 계산" : (mode === "Dry" ? "건조 상태" : "강우·배수만 계산")) +
+          "\n선택 조건 " + (reasons.join(", ") || "활성 기준 미달") + " · 마지막 수평 유동 " + last;
       el("point").textContent =
-        "Tile " + result.tile_id + " · " + mode + " · " +
-        (result.active ? "수평 유동 계산" : (mode === "Dry" ? "건조 상태" : "강우·배수만 계산")) +
-        (result.calculation_policy === "full_grid_synchronous" ?
-          "\n전체 격자 동기 계산 · 마지막 간격 " + num(result.last_step_seconds, 2) + "초 · 마지막 수평 유동 " + last :
-          "\n선택 조건 " + (reasons.join(", ") || "활성 기준 미달") + " · 마지막 수평 유동 " + last) +
+        "Tile " + result.tile_id + calculation +
+        (result.rain_interval_mm == null ? "" :
         "\n관측소별 최댓값  10분 " + num(result.rain_interval_mm) + " mm / 60분 " + num(result.sliding_mm) +
-        " mm / 감쇠 " + num(result.decaying_mm) + " mm" +
-        "\nReference " + (ref == null ? "자료 없음" : num(ref*1000,2) + " mm") +
-        " / Streaming " + num(result.depth_m*1000,2) + " mm" +
-        (ref == null ? "" : " / 차이 " + num(result.difference_m*1000,2) + " mm") +
-        " · Tile 최대 " + num(result.max_tile_depth_m*1000,2) + " mm" + drain;
+        " mm / 감쇠 " + num(result.decaying_mm) + " mm") +
+        (frame.mode === "reference" ? "\nReference " + num(result.depth_m*1000,2) + " mm" :
+          "\nReference " + (ref == null ? "자료 없음" : num(ref*1000,2) + " mm") +
+          " / Streaming " + num(result.depth_m*1000,2) + " mm" +
+          (ref == null ? "" : " / 차이 " + num(result.difference_m*1000,2) + " mm")) +
+        (result.max_tile_depth_m == null ? "" : " · Tile 최대 " + num(result.max_tile_depth_m*1000,2) + " mm") + drain;
       renderWindows(frame,result.gauge_indices);
     } else {
       el("point").textContent = "Tile " + result.tile_id + " · " + modeName(frame.mode) +
@@ -874,7 +891,7 @@ function renderSeries() {
   ]));
 }
 
-// Update time per 10-minute input for each mode, with the Streaming active-cell share.
+// Update time per input; archived selective runs also show the active-cell share.
 function renderLatency() {
   const target = el("latency-series");
   target.replaceChildren();
@@ -889,7 +906,7 @@ function renderLatency() {
   const y = (value) => bottom - (bottom - top) * value / maxSeconds;
   const cells = metadata?.valid_cell_count || 1;
   const svg = chartFrame(`10분 입력당 갱신 시간, 최대 ${num(maxSeconds, 2)}초`, 98);
-  const share = stream.filter(item => index.has(item.time) && item.mode === "streaming");
+  const share = stream.filter(item => index.has(item.time) && item.mode === "streaming" && !hasPeriods(item));
   if (share.length) {
     const xs = share.map(item => x(index.get(item.time)));
     const points = share.map((item, i) => [xs[i], bottom - (bottom - top) * item.active_cell_count / cells].join(","));
@@ -908,7 +925,7 @@ function renderLatency() {
   cursor(svg, x, top, bottom);
   svgElement(svg, "text", {x: left, y: 94, fill: "#526672", "font-size": 14}, "10분 입력 하나를 반영하는 데 걸린 시간 (초)");
   target.append(svg, chartKey([
-    ["Streaming", "#1b64b5"], ["Reference", "#6a6788"], ["Streaming 활성 셀 비율", "#f6c24a"],
+    ["Streaming", "#1b64b5"], ["Reference", "#6a6788"], ...(share.length ? [["Streaming 활성 셀 비율", "#f6c24a"]] : []),
   ]));
 }
 

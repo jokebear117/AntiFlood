@@ -19,6 +19,7 @@ paths. No acceptance tolerance for Reference RMSE/IoU is invented here.
 
 import json
 import hashlib
+import shutil
 from pathlib import Path
 import subprocess
 import time
@@ -39,7 +40,9 @@ def final_review():
     require(path.is_file(), "G01–G16 outer review is missing; implementation alone is not completion")
     review = json.loads(path.read_text(encoding="utf8"))
     require(set(review.get("criteria", {})) == CRITERIA, "Outer review must cover G01–G16")
-    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
+    git = shutil.which("git") or shutil.which("git.exe")
+    require(git is not None, "Git is required to verify reviewed source coverage")
+    tracked = subprocess.check_output([git, "ls-files", "-z"], cwd=ROOT).decode().split("\0")
     sources = {name for name in tracked if name.startswith(("engine/", "src/", "web/", "docs/", "scripts/"))
                or name in ("README.md", "AGENTS.md", "pyproject.toml")}
     hashes = review.get("source_sha256", {})
@@ -117,11 +120,16 @@ def main():
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             state = request("/api/simulation/state")
+            if state.get("run_id") == run_id or state.get("reference_id") == run_id:
+                owned_ids.add(state["run_id"])
             if state["status"] in ("completed", "error"):
                 break
             time.sleep(.3)
         require(state["status"] == "completed" and state["progress"] == 1 and not state["error"],
                 f"Replay did not complete: {state['status']}")
+        require(state["run_id"] in owned_ids, "Completed run does not belong to this check")
+        # Cold compare starts by publishing its Reference phase's ID.
+        run_id = state["run_id"]
         run = request(f"/api/runs/{run_id}")
         require(run["settings"] == settings and run["frames"], "Saved settings/frames differ")
         require(run.get("reference_id"), "Reference comparison was not produced")
