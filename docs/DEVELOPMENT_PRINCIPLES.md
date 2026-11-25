@@ -19,14 +19,14 @@ AntiFlood는 서울의 지형과 강우 데이터를 기반으로 침수 상태�
 핵심은 다음 세 가지다.
 
 1. 시간에 따라 도착하는 강우 데이터를 처리한다.
-2. 실제로 계산이 필요한 공간 영역을 선택해 물리 연산을 수행한다.
+2. 서울 전역의 모든 유효 격자를 지속적으로 계산하고, 지역별 상태 변화에 따라 계산 주기를 조절해 물리 연산량을 줄인다.
 3. 계산된 결과를 사용자가 직관적으로 이해하고 조작할 수 있도록 보여 준다.
 
 프로젝트의 기술적 중심은 다음과 같다.
 
 - **데이터** — `src/antiflood/prepare.py`는 입력 자료를 준비하고, `src/antiflood/data.py`는 지형·강우·관측소와 선택적 배수율 입력을 읽는다.
 - **스트림** — `src/antiflood/replay.py`가 관측 강우를 시간순으로 재생하고 실행 상태와 결과 저장을 관리한다. `src/antiflood/stream.py`는 최근 강우를 요약한다.
-- **엔진** — `src/antiflood/tiles.py`와 `src/antiflood/simulation.py`가 100m × 100m Tile을 기준으로 활성 셀을 고르고 하나의 수심 상태를 이어 간다. `engine/wca2d.cpp`는 CADDIES의 WCA2Dv1 유출 커널을 호출하며 OpenMP로 병렬 계산한다.
+- **엔진** — `src/antiflood/tiles.py`와 `src/antiflood/simulation.py`가 100m × 100m Tile과 30m 격자의 수심 상태를 관리한다. `engine/wca2d.cpp`는 CADDIES의 WCA2Dv1 유출 커널을 호출하며 OpenMP로 병렬 계산한다. 기존 활성 영역 선택은 제거 대상이며, 지역별 주기 구현 목표와 현재 구현을 구분한다. 새 알고리즘의 기준은 [프로젝트 개선 방향](DEVELOPMENT_SPEC.md)을 따른다.
 - **시각화** — `src/antiflood/frames.py`가 지도용 이미지를 만들고, `src/antiflood/api.py`의 FastAPI 서버가 결과를 제공한다. `web/`은 MapLibre로 3D 지형과 수심을 표시한다. `src/antiflood/agent.py`의 선택 기능인 Solar는 최신 상태와 Tile 정보를 읽어 설명한다.
 
 이 구조를 바꿔야 한다면 실제 문제와 변경 이유를 먼저 확인하라.

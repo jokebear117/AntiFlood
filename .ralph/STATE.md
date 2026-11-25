@@ -1,11 +1,15 @@
 # 현재 상태
 
-- 상태: DONE
-- 완료 라운드: 6
-- 결과: A1–A7을 현재 소스·Git 이력·기존 검증 기록과 대조했고, 추가 수정이 필요한 실제 결함은 확인하지 못했어. 변경 없이 DONE 후보로 보고해.
-- 검증: 실행: node .ralph/runtime/dashboard-repro.cjs의 세 항목 모두 PASS. 서버 health 정상·ready, 저장 기록 재열기·설정 보존·PNG HTTP 200 확인. 최초 기록 조회는 PowerShell 배열 처리 오류로 실패했고 명령 수정 후 성공했어. 미실행: 전체 ralph-verify.py, 새 계산, WSL 실행기, 브라우저 렌더링. 작업 트리는 깨끗해. / 독립 컨트롤러: {"passed": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"], "run_id": "aabb5f1a9bac41a2afde85946e559ab0", "bounds": [126.999, 37.499, 127.001, 37.501], "frames": 104, "last_frame": {"frame_source": "computed", "id": "aabb5f1a9bac41a2afde85946e559ab0_00103", "time": "2022-08-08T22:30:00Z", "rain_observed_at": "2022-08-08T22:29:00Z", "rain_interval_mm": [0.0], "rain_max_mm": 0.0, "max_depth_m": 3.0034755218192317, "active_tile_count": 6, "active_cell_count": 42, "cumulative_cell_updates": 834792, "worker_count": 2, "rain_m3": 14137.199999999979, "drain_m3": 1326.0563856496883, "boundary_outflow_m3": 0.0, "water_m3": 12811.143614350316, "mass_error_m3": 2.546585164964199e-11}, "point": {"tile_id": "1999_4445", "depth_m": 0.0, "time": "2022-08-08T22:30:00Z", "active": true, "rain": [{"station_id": "2402", "name": "반포펌프장", "mm": 0.0}]}, "launcher_reused_pid": "26", "limits": "UI wiring and HTTP flow checked; no fresh browser rendering or paid Solar response asserted"}
-- 시작 체크포인트: 9dceffb84cca56a75e272362311604ce4b149fdc
-- 최신 체크포인트: 이 파일을 담은 HEAD (`git rev-parse HEAD`)
-- 다음 행동: 완료 조건 확인을 마쳤다.
-- 이번 실행 로그: `.ralph/runtime/run-1795488491039266800`
-- 실제 복구 해시: `.ralph/runtime/checkpoints.json`. 작업 브랜치: ralph/completion-check
+- 상태: CONTINUE
+- 완료 라운드: 0
+- 목표: 전체 격자 지속 계산, 순차 강우 입력과 요약, 지역별 적응형 주기, 보존적 경계 전달, 실제 비교 및 UI와 문서.
+- G01: PENDING. 기존 Reference 분기는 확인했으나 새 변경 후 보존 여부 검증 전이다.
+- G02–G07: PENDING. 현재 위험도 선택, 전체 강우 보관, 다중 주기 경계 미구현이다.
+- G08–G11: PENDING. 기존 실행·OpenMP·10분 저장·대시보드는 있으나 새 연결과 검증이 필요하다.
+- G12: PENDING. 기존 선택적 방식의 측정을 재사용하지 않는다.
+- G13–G14: PENDING. 구현 후 고정 README 구조를 지키며 문서와 아키텍처 이미지를 갱신한다.
+- G15–G16: PENDING. Windows/WSL 경로와 기존 자료를 유지하고 최종 확인한다.
+- 보존 체크포인트: ac0b20d (승인받은 기존 5개 파일의 전용 브랜치 로컬 커밋).
+- 이전 GOAL/STATE/PROMPT 사본: .ralph/runtime/pre-adaptive-*.md. 과거 HISTORY는 보존했다.
+- 다음 행동: 전체 격자 지속 계산과 Reference를 보존하는 최소 변경부터 구현한다. 강우 소유 구조는 data.load_scenarios, Scenario.intervals, Replay, comparison.run_conditions를 함께 점검한다.
+- 실행: python scripts/ralph-loop.py. 기본 6라운드·900초/라운드·5400초/실행·최대 2회 시도. 자동 새 실행과 원격 푸시 금지.

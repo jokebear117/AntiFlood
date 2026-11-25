@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RALPH = ROOT / ".ralph"
 RUNTIME = RALPH / "runtime"
 GUARDED = [".ralph/GOAL.md", "scripts/ralph-loop.py", "scripts/ralph-verify.py",
-           "AGENTS.md", ".gitignore", ".ralph/PROMPT.md", ".ralph/STATE.md", ".ralph/HISTORY.md"]
+           "AGENTS.md", ".gitignore", ".ralph/PROMPT.md", ".ralph/STATE.md", ".ralph/HISTORY.md",
+           "docs/DEVELOPMENT_SPEC.md", "docs/AUTONOMOUS_DEVELOPMENT.md"]
 DESKTOP_CONTEXT = {
     "CODEX_APP_RUNTIME_CLI_PATH", "CODEX_APP_TOOLS_PIPE_PATH", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
     "CODEX_MCP_NODE_PATH", "CODEX_SESSION_ID", "CODEX_SHELL", "CODEX_TASK_WORKSPACE_VERIFYING_IDENTITY",
@@ -110,7 +111,7 @@ def verify(timeout, run_dir):
     if code:
         raise RuntimeError(f"Independent acceptance exited {code}; see {log.relative_to(ROOT)}")
     evidence = json.loads(report.read_text(encoding="utf8"))
-    if set(evidence.get("passed", [])) != {f"A{i}" for i in range(1, 8)}:
+    if set(evidence.get("passed", [])) != {f"G{i:02d}" for i in range(1, 17)}:
         raise RuntimeError("Independent acceptance did not confirm every fixed criterion")
     return evidence
 

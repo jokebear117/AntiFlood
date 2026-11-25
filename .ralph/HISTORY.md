@@ -88,3 +88,11 @@
 - 상태: DONE
 - 결과: A1–A7을 현재 소스·Git 이력·기존 검증 기록과 대조했고, 추가 수정이 필요한 실제 결함은 확인하지 못했어. 변경 없이 DONE 후보로 보고해.
 - 검증: 실행: node .ralph/runtime/dashboard-repro.cjs의 세 항목 모두 PASS. 서버 health 정상·ready, 저장 기록 재열기·설정 보존·PNG HTTP 200 확인. 최초 기록 조회는 PowerShell 배열 처리 오류로 실패했고 명령 수정 후 성공했어. 미실행: 전체 ralph-verify.py, 새 계산, WSL 실행기, 브라우저 렌더링. 작업 트리는 깨끗해. / 독립 컨트롤러: {"passed": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"], "run_id": "aabb5f1a9bac41a2afde85946e559ab0", "bounds": [126.999, 37.499, 127.001, 37.501], "frames": 104, "last_frame": {"frame_source": "computed", "id": "aabb5f1a9bac41a2afde85946e559ab0_00103", "time": "2022-08-08T22:30:00Z", "rain_observed_at": "2022-08-08T22:29:00Z", "rain_interval_mm": [0.0], "rain_max_mm": 0.0, "max_depth_m": 3.0034755218192317, "active_tile_count": 6, "active_cell_count": 42, "cumulative_cell_updates": 834792, "worker_count": 2, "rain_m3": 14137.199999999979, "drain_m3": 1326.0563856496883, "boundary_outflow_m3": 0.0, "water_m3": 12811.143614350316, "mass_error_m3": 2.546585164964199e-11}, "point": {"tile_id": "1999_4445", "depth_m": 0.0, "time": "2022-08-08T22:30:00Z", "active": true, "rain": [{"station_id": "2402", "name": "반포펌프장", "mm": 0.0}]}, "launcher_reused_pid": "26", "limits": "UI wiring and HTTP flow checked; no fresh browser rendering or paid Solar response asserted"}
+
+## 새 개선 명세 초기 설정 — 2026-11-25 KST
+
+사용자가 전체 격자 지속 계산과 지역별 Adaptive Time Stepping, bounded-memory 강우 처리, G01–G16 완료 조건을 지정했다. 별도 개선 방향도 전달받았고 docs/DEVELOPMENT_SPEC.md에 정리했다. 실행 지침 원문은 docs/AUTONOMOUS_DEVELOPMENT.md에 보존했다. 이전 HTML 설계에는 대체 안내를 넣었다.
+
+기존 5개 파일 변경은 사용자 로컬 커밋 승인에 따라 ralph/adaptive-time-stepping의 ac0b20d에 보존했다. 과거 GOAL/STATE/PROMPT는 runtime/pre-adaptive-*.md에 복사했다. 새 목표를 위해 STATE의 이전 DONE과 라운드 수를 초기화했다. 기본 6라운드, 900초/라운드, 5400초/실행, 최대 2회 시도를 유지하며 원격 푸시는 승인받지 않았다.
+
+읽기 전용 search-first 조사에서 기존 Tile 집계, OpenMP/WCA2D, 10분 저장과 RMSE/IoU 비교를 재사용할 수 있음을 확인했다. 전체 강우 상주는 data.load_scenarios와 Scenario.intervals에서 발생한다. 기존 유출 부피의 비례 재사용에는 안전 근거가 없다. Sliding Window는 현재 UI에 용도가 있으므로 명확히 구분해 정리한다. 현재 목표의 구현과 성능은 아직 검증하지 않았다.
