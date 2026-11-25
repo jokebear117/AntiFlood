@@ -4,6 +4,8 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import TextIOWrapper
+from functools import partial
+from itertools import groupby
 import os
 from pathlib import Path
 from zipfile import ZipFile
@@ -64,15 +66,22 @@ class RainInterval:
 class Scenario:
     id: str
     title: str
-    intervals: tuple[RainInterval, ...]
+    dataset: Path
+    gauge_codes: tuple[str, ...]
+    start: datetime
+    end: datetime
+    interval_count: int
+
+    def iter_intervals(self):
+        return iter_rain_intervals(self.dataset, self.gauge_codes, self.start, self.end)
 
     def summary(self):
         return {
             "id": self.id,
             "title": self.title,
-            "start": utc(self.intervals[0].start),
-            "end": utc(self.intervals[-1].end),
-            "interval_count": len(self.intervals),
+            "start": utc(self.start),
+            "end": utc(self.end),
+            "interval_count": self.interval_count,
             "rainfall_source": "서울시 OA-1168 · 10분 우량",
         }
 
@@ -255,56 +264,85 @@ def load_gauges(dataset, grid):
     return tuple(gauges[index] for index in used), nearest
 
 
-def load_scenarios(dataset, gauges):
-    gauge_index = {gauge[0]: index for index, gauge in enumerate(gauges)}
-    values = {}
+def _rain_rows(source, gauge_index, start, end):
+    previous = None
+    for row in csv.DictReader(source):
+        index = gauge_index.get(row["강우량계 코드"].strip())
+        if index is None:
+            continue
+        observed_at = datetime.fromisoformat(row["자료수집 시각"]).replace(tzinfo=KST)
+        if observed_at.minute % 10 != 9 or observed_at.second:
+            continue
+        time = observed_at - timedelta(minutes=9)
+        if previous is not None and time < previous:
+            raise ValueError("강우 입력이 시간순으로 정렬되어 있지 않습니다.")
+        previous = time
+        if start <= time < end:
+            yield time, index, row["10분우량"].strip()
+
+
+def _rain_interval(gauge_count, group):
+    time, rows = group
+    amounts = np.full(gauge_count, np.nan)
+    for _, index, text in rows:
+        if not text:
+            continue
+        amount = float(text)
+        if not np.isfinite(amount) or amount < 0:
+            raise ValueError(f"강우량 값이 유효하지 않습니다. {time} / gauge {index}")
+        if not np.isnan(amounts[index]) and amounts[index] != amount:
+            raise ValueError(f"같은 시각의 강우량이 서로 다릅니다. {time} / gauge {index}")
+        amounts[index] = amount
+    if np.isfinite(amounts).all():
+        return RainInterval(time, time + INTERVAL, time + timedelta(minutes=9), amounts)
+    return None
+
+
+def iter_rain_intervals(dataset, gauge_codes, start=RAIN_START, end=RAIN_END):
+    """Read one complete bin at a time; no yielded rainfall array is retained.
+
+    The source CSV must be chronological. Missing gauges split scenarios rather
+    than being filled with zero. Reopening gives Reference an independent pass.
+    """
+    gauge_index = {code: index for index, code in enumerate(gauge_codes)}
     path = dataset / "raw/rainfall/rainfall_2022.zip"
     with ZipFile(path, metadata_encoding="cp949") as archive:
         name = next(name for name in archive.namelist() if name.endswith("08월.csv"))
         with TextIOWrapper(archive.open(name), encoding="cp949", newline="") as source:
-            for row in csv.DictReader(source):
-                index = gauge_index.get(row["강우량계 코드"].strip())
-                if index is None:
-                    continue
-                observed_at = datetime.fromisoformat(row["자료수집 시각"]).replace(tzinfo=KST)
-                if not RAIN_START <= observed_at < RAIN_END:
-                    continue
-                # OA-1168 labels 00:09 as the 00:00–00:10 ten-minute bin.
-                if observed_at.minute % 10 != 9 or observed_at.second:
-                    continue
-                start = observed_at - timedelta(minutes=9)
-                if not row["10분우량"].strip():
-                    continue
-                amount = float(row["10분우량"])
-                if not np.isfinite(amount) or amount < 0:
-                    raise ValueError(f"강우량 값이 유효하지 않습니다. {observed_at} / {gauges[index][0]}")
-                amounts = values.setdefault(start, np.full(len(gauges), np.nan))
-                if not np.isnan(amounts[index]) and amounts[index] != amount:
-                    raise ValueError(f"같은 시각의 강우량이 서로 다릅니다. {observed_at} / {gauges[index][0]}")
-                amounts[index] = amount
+            groups = groupby(_rain_rows(source, gauge_index, start, end), key=lambda row: row[0])
+            # map/filter keep no reference to their previously returned array.
+            yield from filter(None, map(partial(_rain_interval, len(gauge_codes)), groups))
 
+
+def load_scenarios(dataset, gauges):
+    gauge_codes = tuple(gauge[0] for gauge in gauges)
     runs = []
-    current = []
-    time = RAIN_START
-    while time < RAIN_END:
-        amounts = values.get(time)
-        if amounts is not None and np.isfinite(amounts).all():
-            current.append(RainInterval(time, time + INTERVAL, time + timedelta(minutes=9), amounts))
-        elif current:
-            runs.append(tuple(current))
-            current = []
-        time += INTERVAL
-    if current:
-        runs.append(tuple(current))
+    start = end = None
+    count = 0
+    peak = 0.0
+    for interval in iter_rain_intervals(dataset, gauge_codes):
+        if end is not None and interval.start != end:
+            runs.append((start, end, count, peak))
+            start = None
+            count = 0
+            peak = 0.0
+        if start is None:
+            start = interval.start
+        end = interval.end
+        count += 1
+        peak = max(peak, float(interval.gauge_mm.max()))
+        del interval
+    if start is not None:
+        runs.append((start, end, count, peak))
     if not runs:
         raise ValueError("계산 영역에 필요한 관측소의 강우가 모두 있는 10분 구간이 없습니다.")
-    main = max(range(len(runs)), key=lambda index: max(item.gauge_mm.max() for item in runs[index]))
+    main = max(range(len(runs)), key=lambda index: runs[index][3])
     result = []
     for index in [main, *(index for index in range(len(runs)) if index != main)]:
-        intervals = runs[index]
+        start, end, count, _ = runs[index]
         result.append(Scenario(
             "seoul_2022_aug" if index == main else f"seoul_2022_aug_{index + 1}",
-            f"{intervals[0].start:%m.%d %H:%M} ~ {intervals[-1].end:%m.%d %H:%M} KST",
-            intervals,
+            f"{start:%m.%d %H:%M} ~ {end:%m.%d %H:%M} KST",
+            dataset, gauge_codes, start, end, count,
         ))
     return result

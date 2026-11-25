@@ -27,7 +27,9 @@ class RainHistory:
     def add(self, amount_mm):
         if len(self.window) == RISK.window_intervals:
             self.hour_mm -= self.window.popleft()
-        self.window.append(amount_mm)
+        # Exact 60-minute totals are retained only for the dashboard. Own the
+        # bounded display buffer so it cannot retain the input interval array.
+        self.window.append(amount_mm.copy())
         self.hour_mm += amount_mm
         self.decay_mm *= RISK.decay_factor
         self.decay_mm += amount_mm
