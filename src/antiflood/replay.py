@@ -174,12 +174,16 @@ class Replay:
         np.save(directory / "gauge_map.npy", self.gauge_map)
         if self.grid.drain_mm_h is not None:
             np.savez_compressed(directory / "drainage.npz", rate=self.grid.drain_mm_h, source=self.grid.drain_class)
+        session = SimulationSession(
+            self.grid, self.tiles, self.engine, self.gauge_map, len(self.gauges),
+            scenario.start, self.threads, mode,
+        )
         metadata = {
             "scenario": scenario.summary(),
             "settings": self.settings,
             "status": "running",
             "mode": mode,
-            "calculation_policy": "full_grid_synchronous",
+            "calculation_policy": session.calculation_policy,
             "conditions": conditions,
             "reference_id": reference.name if reference else None,
             "map": self.rasters.metadata(),
@@ -192,10 +196,6 @@ class Replay:
         history.write_json(directory / "run.json", metadata)
         if mode == "streaming":
             np.save(directory / "tile_map.npy", self.tiles.by_cell.reshape(self.grid.valid.shape))
-        session = SimulationSession(
-            self.grid, self.tiles, self.engine, self.gauge_map, len(self.gauges),
-            scenario.start, self.threads, mode,
-        )
         with self.condition:
             self.run_id = directory.name
             self.phase = mode

@@ -117,3 +117,10 @@
 - 상태: CONTINUE
 - 결과: G05–G07의 첫 구현으로, 물이 도달할 수 없는 건조 Tile은 30·60초마다 계산하고 나머지는 기존 CFL 주기로 계산하도록 바꿨어. 모든 Tile을 공통 시각에 동기화하고 실제 주기를 저장해. Reference는 보존했어. G01–G09·G11·G15–G16은 추가 검증이 필요하고, G10·G12–G14는 미완료야. G별 근거와 다음 작업은 .ralph/runtime/round3-status.json에 남겼어.
 - 검증: 539셀 직렬 네이티브 시험에서 질량·비음수·유한값·경계·공통 시각과 436회의 주기 간 경계 유량 검사를 통과했어. 최대 질량 오차 2.73e-12m³, Reference 대비 최대 RMSE 0.00241m였으며 허용 기준은 확정하지 않았어. 셀 연산은 줄었지만 실행 시간 개선은 입증하지 못했어. 실제 47개 관측소 강우 3구간을 합성 격자에 적용했을 때 Reference는 시작 HEAD와 일치했고, 개선 방식의 계산량 절감은 없었어. 증거: .ralph/runtime/round3-regional.json, round3-actual-rain.json. 재현: .venv/Scripts/python.exe .ralph/runtime/round3-check.py. 구문 검사와 git diff --check 통과. WSL은 E_ACCESSDENIED, OpenMP는 libgomp 부재로 미검증이야. 다음은 준비된 WSL에서 scripts/check-regional.py 실행 후 짧은 실제 DEM 입력으로 적용 범위와 4스레드 성능을 확인하는 작업이야. 브라우저·서울 전체 비교·최종 독립 검증은 미실행이며 서버·원본·기존 결과·보호 파일은 보존했어.
+
+## 컨트롤러 라운드 4
+
+- 시작 HEAD: 99cfe91e78c4782095fea4b1ca3343c4cd302248
+- 상태: CONTINUE
+- 결과: G06–G07: 긴 계산 주기를 건조 Tile에서 유출 임계값에 도달하지 않는 얕은 물까지 확장했어. 기존 WCA2D와 Reference는 보존했고, 저장 메타데이터가 실제 계산 정책을 기록하도록 고쳤어. G01–G09·G11·G15–G16은 추가 검증, G10·G12–G14는 미완료야. G별 근거와 다음 작업은 .ralph/runtime/round4-status.json에 기록했어.
+- 검증: 직렬 네이티브 시험에서 질량·비음수·유한값·경계·공통 시각·임계값 전환을 확인했어. 최대 질량 오차 3.30e-12m³. 실제 47개 관측소 강우 3구간을 합성 격자에 적용하면 셀 연산은 64800→16200회, 최대 RMSE는 2.12e-19m였어. 격리 Replay의 저장·입력 해제·reader 닫기, Python 구문 검사와 git diff --check도 통과했어. 증거는 .ralph/runtime/round4-{regional,cutoff,actual-rain,replay}.json, 재현 명령은 round4-status.json에 있어. WSL은 E_ACCESSDENIED로 한 번 실패해 재시도하지 않았어. 실제 DEM·OpenMP·실행 시간 개선·브라우저·최종 독립 검증은 미확인이야. 다음은 저장소 루트에서 wsl -d AntiFlood-Probe -- sh -lc '~/.venvs/antiflood/bin/python scripts/check-regional.py' 실행 후 짧은 실제 DEM의 4스레드 확인이야. 서버·원본·기존 결과·보호 파일은 보존했어.

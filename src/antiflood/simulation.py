@@ -15,6 +15,10 @@ from .data import CELL_M, ROOT
 from .stream import RISK, RainHistory
 from .tiles import FULL_GRID, TileGrid
 
+# Must match ignore_wd in engine/wca2d.cpp's unchanged WCA2Dv1 call.
+# This is a physical kernel cutoff, not a rainfall/risk exclusion threshold.
+WCA_MIN_FLOW_DEPTH_M = 0.001
+
 
 class NativeEngine:
     def __init__(self):
@@ -82,7 +86,7 @@ class SimulationSession:
 
     @property
     def calculation_policy(self):
-        return "full_grid_synchronous" if self.mode == "reference" else "dry_tile_temporal_blocking"
+        return "full_grid_synchronous" if self.mode == "reference" else "subthreshold_tile_temporal_blocking"
 
     def _start_slab(self):
         # WCA2D's velocity cap (10 m/s) gives a minimum CFL step of 1.5 s
@@ -96,11 +100,23 @@ class SimulationSession:
         valid = self.tiles.cells
         # Existing sparse neighbours and NumPy suffice for this bounded breadth
         # first expansion. Decay only requests more work; it removes no water.
-        wet = ((self.depth[valid] > 0) | (self.rain[valid] > 0)
+        # With constant sources, h + rain * horizon bounds depth before drain
+        # and before incoming flow. Any cell able to emit within this slab is
+        # a seed; the dependency cone then covers all possible incoming flow.
+        # Remaining cells may hold water, but cannot emit at any intermediate
+        # time. Their constant rain/drain ODE is integrated exactly in one call.
+        wet = ((self.depth[valid] + self.rain[valid] * horizon >= WCA_MIN_FLOW_DEPTH_M)
                | (self.history.decay_mm[self.gauge_map[valid]] >= RISK.decay_mm))
         reached = np.zeros(self.depth.size, dtype=bool)
         frontier = valid[wet]
         reached[frontier] = True
+        seed_tiles = np.zeros(len(self.tiles.ids), dtype=bool)
+        seed_tiles[self.tiles.by_cell[frontier]] = True
+        # Widespread rainfall commonly seeds every tile. There is no remaining
+        # regional classification to discover in that case.
+        if seed_tiles.all():
+            reached[valid] = True
+            frontier = np.empty(0, dtype=np.int32)
         for _ in range(self._cone_radius):
             if not frontier.size:
                 break
@@ -202,10 +218,11 @@ class SimulationSession:
             self.elapsed = self._slab_end_elapsed
             self.last_update[self._fast_tiles] = self.elapsed
         if self._slab_remaining == 0 and self._slow_cells.size:
-            # These cells have no source and cannot receive a message during
-            # this slab. Their exact solution is zero, but they still execute
-            # the same source/drain/outflow kernel once on their longer clock.
-            if np.any(self.depth[self._slow_cells]) or np.any(self.rain[self._slow_cells]):
+            # No message can reach these cells during this slab and even the
+            # no-drain depth bound stays below the kernel's outflow cutoff.
+            # Every cell still executes source/drain/outflow on its long clock.
+            upper = self.depth[self._slow_cells] + self.rain[self._slow_cells] * self._slab_duration
+            if np.any(upper >= WCA_MIN_FLOW_DEPTH_M):
                 raise RuntimeError("Deferred tile is no longer hydraulically isolated")
             self._native_step(self._slow_cells, self._slow_tiles, self._slab_duration)
             self.last_update[self._slow_tiles] = self.elapsed
