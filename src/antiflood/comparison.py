@@ -6,6 +6,7 @@ import json
 import os
 import platform
 from pathlib import Path
+from contextlib import closing
 
 import numpy as np
 
@@ -19,10 +20,12 @@ def run_conditions(grid, gauge_map, scenario, threads, engine):
     digest = sha256()
     for array in (grid.valid, grid.elevation, grid.boundary_elevation, grid.drain, gauge_map):
         digest.update(memoryview(np.ascontiguousarray(array)).cast("B"))
-    for interval in scenario.intervals:
-        digest.update(utc(interval.start).encode())
-        digest.update(utc(interval.end).encode())
-        digest.update(memoryview(interval.gauge_mm).cast("B"))
+    with closing(scenario.iter_intervals()) as intervals:
+        for interval in intervals:
+            digest.update(utc(interval.start).encode())
+            digest.update(utc(interval.end).encode())
+            digest.update(memoryview(interval.gauge_mm).cast("B"))
+            del interval
     environment = {
         "host": platform.node(),
         "os": platform.platform(),

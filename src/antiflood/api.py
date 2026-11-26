@@ -336,10 +336,17 @@ def render_saved_frame(directory, stem, layer):
     started = perf_counter()
     metadata = json.loads((directory / "run.json").read_text(encoding="utf8"))
     valid = np.load(directory / "valid.npy", mmap_mode="r")
-    if layer == "active":
+    if layer in ("active", "period"):
         with np.load(directory / f"{stem}.npz") as arrays:
-            tile_map = np.load(directory / "tile_map.npy", mmap_mode="r")
-            values = arrays["tile_modes"][tile_map]
+            if layer == "period" and "tile_step_seconds" not in arrays:
+                frame = json.loads((directory / f"{stem}.json").read_text(encoding="utf8"))
+                if frame.get("calculation_policy") != "full_grid_synchronous":
+                    raise HTTPException(404, "이 시각의 Tile 계산 간격 기록이 없습니다.")
+                values = np.full(valid.shape, frame["last_step_seconds"], dtype=np.float32)
+            else:
+                tile_map = np.load(directory / "tile_map.npy", mmap_mode="r")
+                name = "tile_step_seconds" if layer == "period" else "tile_modes"
+                values = arrays[name][tile_map]
     else:
         values = history.load_depth(directory, stem)
         if layer == "difference":
@@ -350,13 +357,15 @@ def render_saved_frame(directory, stem, layer):
 
 
 @app.get("/api/frames/{frame_id}.png")
-def frame_image(frame_id: str, layer: Literal["depth", "active", "difference"] = "depth"):
+def frame_image(frame_id: str, layer: Literal["depth", "active", "period", "difference"] = "depth"):
     directory, stem = frame_file(frame_id)
     headers = {"Cache-Control": "private, max-age=86400, immutable"}
     if layer == "depth" and (directory / f"{stem}.png").is_file():
         return FileResponse(directory / f"{stem}.png", media_type="image/png", headers=headers)
     frame = json.loads((directory / f"{stem}.json").read_text(encoding="utf8"))
     if ((layer == "active" and frame.get("mode") != "streaming")
+            or (layer == "period" and frame.get("calculation_policy") not in
+                ("subthreshold_tile_temporal_blocking", "dry_tile_temporal_blocking", "full_grid_synchronous"))
             or (layer == "difference" and not frame.get("reference_frame_id"))):
         raise HTTPException(404, "이 시각에 해당 지도 자료가 없습니다.")
     image, seconds = render_saved_frame(directory, stem, layer)

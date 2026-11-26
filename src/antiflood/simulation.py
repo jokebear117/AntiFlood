@@ -1,6 +1,7 @@
 """Keep one continuous depth grid and advance it with the native WCA2D kernel."""
 
 import ctypes
+import math
 from datetime import timedelta
 import os
 from pathlib import Path
@@ -11,8 +12,12 @@ import numpy as np
 from numpy.ctypeslib import ndpointer
 
 from .data import CELL_M, ROOT
-from .stream import RainHistory
-from .tiles import HALO, INFLOW, KEPT, TileGrid
+from .stream import RISK, RainHistory
+from .tiles import FULL_GRID, TileGrid
+
+# Must match ignore_wd in engine/wca2d.cpp's unchanged WCA2Dv1 call.
+# This is a physical kernel cutoff, not a rainfall/risk exclusion threshold.
+WCA_MIN_FLOW_DEPTH_M = 0.001
 
 
 class NativeEngine:
@@ -50,7 +55,7 @@ class SimulationSession:
         self.grid = grid
         self.tiles = tiles
         self.engine = engine
-        self.gauge_map = gauge_map.ravel()
+        self.gauge_map = np.ascontiguousarray(gauge_map.ravel(), dtype=np.int32)
         self.history = RainHistory(gauge_count)
         self.depth = np.zeros(grid.valid.size)
         self.maximum_depth = np.zeros_like(self.depth)
@@ -58,15 +63,13 @@ class SimulationSession:
         self.outflow = np.empty((self.depth.size, 4))
         # rain, drain, boundary outflow (m3), inactive cells that received inflow, deepest cell (m)
         self.budget = np.zeros(5)
-        self.reselect = True
-        self.kept = None
-        self.selections = self.additions = 0
-        self.inflow = False
-        self.active_cells = np.empty(0, dtype=np.int32)
         self.rain_m3 = self.drain_m3 = self.boundary_outflow_m3 = 0.0
         self.threads = threads
         self.worker_count = self.cell_steps = self.active_cell_count = 0
-        self.active_tiles = np.empty(0, dtype=np.int32)
+        self.active_tiles = np.arange(len(tiles.ids))
+        self.tile_modes = np.full(len(tiles.ids), FULL_GRID, dtype=np.uint8)
+        self.tile_reasons = np.zeros(len(tiles.ids), dtype=np.uint8)
+        self.last_step_seconds = 0.0
         self.mode = mode
         self.received = np.zeros(self.depth.size, dtype=np.uint8)
         self.selected = np.ascontiguousarray(tiles.valid, dtype=np.uint8)
@@ -76,6 +79,79 @@ class SimulationSession:
         self.interval = None
         self.remaining = 0.0
         self.manning = 0.04
+        self.synchronization_seconds = 60.0
+        self.tile_step_seconds = np.zeros(len(tiles.ids))
+        self._slab_remaining = 0.0
+        self._fine_steps = 0
+
+    @property
+    def calculation_policy(self):
+        return "full_grid_synchronous" if self.mode == "reference" else "subthreshold_tile_temporal_blocking"
+
+    def _start_slab(self):
+        # WCA2D's velocity cap (10 m/s) gives a minimum CFL step of 1.5 s
+        # on the retained 30 m grid. One final partial step is allowed. The
+        # dependency cone therefore bounds every possible wetting front, without
+        # predicting a flux or scaling an old donor volume.
+        if not 0 < self.synchronization_seconds <= 60:
+            raise ValueError("Regional synchronization period must be in (0, 60] seconds")
+        horizon = min(self.remaining, self.synchronization_seconds)
+        self._cone_radius = math.ceil(horizon / (0.5 * CELL_M / 10.0)) + 1
+        valid = self.tiles.cells
+        # Existing sparse neighbours and NumPy suffice for this bounded breadth
+        # first expansion. Decay only requests more work; it removes no water.
+        # With constant sources, h + rain * horizon bounds depth before drain
+        # and before incoming flow. Any cell able to emit within this slab is
+        # a seed; the dependency cone then covers all possible incoming flow.
+        # Remaining cells may hold water, but cannot emit at any intermediate
+        # time. Their constant rain/drain ODE is integrated exactly in one call.
+        wet = ((self.depth[valid] + self.rain[valid] * horizon >= WCA_MIN_FLOW_DEPTH_M)
+               | (self.history.decay_mm[self.gauge_map[valid]] >= RISK.decay_mm))
+        reached = np.zeros(self.depth.size, dtype=bool)
+        frontier = valid[wet]
+        reached[frontier] = True
+        seed_tiles = np.zeros(len(self.tiles.ids), dtype=bool)
+        seed_tiles[self.tiles.by_cell[frontier]] = True
+        # Widespread rainfall commonly seeds every tile. There is no remaining
+        # regional classification to discover in that case.
+        if seed_tiles.all():
+            reached[valid] = True
+            frontier = np.empty(0, dtype=np.int32)
+        for _ in range(self._cone_radius):
+            if not frontier.size:
+                break
+            adjacent = self.tiles.neighbours[frontier].ravel()
+            adjacent = adjacent[adjacent >= 0]
+            frontier = np.unique(adjacent[~reached[adjacent]])
+            reached[frontier] = True
+        fast = np.zeros(len(self.tiles.ids), dtype=np.uint8)
+        fast[self.tiles.by_cell[valid[reached[valid]]]] = 1
+        self._fast_tiles = np.flatnonzero(fast)
+        self._slow_tiles = np.flatnonzero(fast == 0)
+        self._fast_cells = np.ascontiguousarray(self.tiles.cells[fast[self.tiles.valid_tiles] != 0])
+        self._slow_cells = np.ascontiguousarray(self.tiles.cells[fast[self.tiles.valid_tiles] == 0])
+        self._slab_duration = self._slab_remaining = horizon
+        self._slab_end_remaining = self.remaining - horizon
+        self._slab_end_elapsed = self.elapsed + horizon
+        self._fine_steps = 0
+        self.budget[4] = self.depth.max()
+
+    def _native_step(self, cells, tile_ids, dt):
+        self.selected.fill(0)
+        self.selected[cells] = 1
+        team = self.engine.step(
+            self.grid.elevation, self.grid.boundary_elevation, self.depth, self.rain, self.grid.drain,
+            self.tiles.neighbours, cells, cells.size, cells, self.selected, cells.size,
+            cells, cells.size,
+            CELL_M, dt, self.manning, self.threads, self.outflow, self.budget, self.received,
+            self.maximum_depth,
+        )
+        self.cell_steps += cells.size
+        self.worker_count = max(team, self.worker_count)
+        self.rain_m3 += self.budget[0]
+        self.drain_m3 += self.budget[1]
+        self.boundary_outflow_m3 += self.budget[2]
+        self.tile_step_seconds[tile_ids] = dt
 
     def set_rain(self, interval):
         if interval.start != self.time or self.remaining > 0:
@@ -87,9 +163,6 @@ class SimulationSession:
         self.rain[cells] = interval.gauge_mm[region] / (1_000 * self.remaining)
         if self.mode == "streaming":
             self.history.add(interval.gauge_mm)
-            self.tile_rain = self.tiles.rain_state(self.gauge_map, interval.gauge_mm, self.history)
-            self.reselect = True
-            self.kept = None
         self.max_rain_rate = self.rain.max()
 
     def advance_step(self):
@@ -97,55 +170,9 @@ class SimulationSession:
             raise ValueError("계산할 강우 구간이 없습니다.")
         valid = self.tiles.cells
         if self.mode == "streaming":
-            # Rain and the windows change only with a new 10-minute input, so the full tile scan
-            # runs once per input. Within an interval an inactive tile needs horizontal flow only
-            # after water flows into it; the engine reports that, and only the tiles that received
-            # water are added. Tiles stay active until the interval ends, so the active area only
-            # grows and its edge does not flicker on and off.
-            if self.reselect:
-                self.tile_modes, self.tile_reasons = self.tiles.select(self.depth, self.tile_rain, self.received)
-                active = self.tile_modes >= HALO
-                if self.kept is not None:
-                    held = self.kept & ~active
-                    self.tile_modes[held] = HALO
-                    self.tile_reasons[held] |= KEPT
-                    active |= self.kept
-                self.kept = active
-                self.active_tiles = np.flatnonzero(active)
-                self.selected[valid] = active[self.tiles.valid_tiles]
-                self.active_cells = valid[self.selected[valid] != 0]
-                # A mask avoids sorting; flatnonzero returns the cells in memory order.
-                self.receiver_mask = self.selected.astype(bool)
-                around = self.tiles.neighbours[self.active_cells].ravel()
-                self.receiver_mask[around[around >= 0]] = True
-                self.receivers = np.flatnonzero(self.receiver_mask).astype(np.int32)
-                # Flags outside the new receiver set would go stale; the engine rewrites the rest.
-                self.received[:] = 0
-                self.selections += 1
-                self.reselect = self.inflow = False
-            elif self.inflow:
-                wet = np.flatnonzero(self.received)
-                added = np.unique(self.tiles.by_cell[wet])
-                added = added[~self.kept[added]]
-                if added.size:
-                    self.kept[added] = True
-                    self.tile_modes[added] = HALO
-                    self.tile_reasons[added] |= INFLOW
-                    self.active_tiles = np.flatnonzero(self.kept)
-                    members = np.concatenate([self.tiles.members[tile] for tile in added])
-                    self.selected[members] = 1
-                    self.active_cells = np.concatenate((self.active_cells, members))
-                    around = self.tiles.neighbours[members].ravel()
-                    self.receiver_mask[members] = True
-                    self.receiver_mask[around[around >= 0]] = True
-                    self.receivers = np.flatnonzero(self.receiver_mask).astype(np.int32)
-                self.received[wet] = 0
-                self.additions += 1
-                self.inflow = False
-            cells, receivers = self.active_cells, self.receivers
-        else:
-            self.active_tiles = np.arange(len(self.tiles.ids))
-            cells = receivers = valid
+            return self._advance_regional()
+        # Preserve the original synchronous Reference kernel and CFL formula.
+        cells = receivers = valid
         self.active_cell_count = cells.size
         self.cell_steps += cells.size
         # Both policies use the full grid for the same CFL bound.
@@ -163,11 +190,46 @@ class SimulationSession:
         self.rain_m3 += self.budget[0]
         self.drain_m3 += self.budget[1]
         self.boundary_outflow_m3 += self.budget[2]
-        if self.budget[3] > 0:
-            self.inflow = True
+        self.last_step_seconds = dt
         self.elapsed += dt
         self.last_update[self.active_tiles] = self.elapsed
+        self.tile_step_seconds[:] = dt
         self.remaining = max(0.0, self.remaining - dt)
+        self.time = self.interval.end - timedelta(seconds=self.remaining)
+        return self.remaining == 0
+
+    def _advance_regional(self):
+        if self._slab_remaining == 0:
+            self._start_slab()
+        max_depth = self.budget[4] + self.max_rain_rate * 15
+        speed = min(10.0, 3.132 * np.sqrt(max_depth))
+        dt = min(self._slab_remaining, 15.0, 0.5 * CELL_M / max(speed, 1.0))
+        if self._fast_cells.size:
+            self._fine_steps += 1
+            if self._fine_steps >= self._cone_radius:
+                raise RuntimeError("Regional dependency cone exhausted before synchronization")
+            self._native_step(self._fast_cells, self._fast_tiles, dt)
+        else:
+            dt = self._slab_remaining
+        self.elapsed += dt
+        self.last_update[self._fast_tiles] = self.elapsed
+        self._slab_remaining = max(0.0, self._slab_remaining - dt)
+        if self._slab_remaining == 0:
+            self.elapsed = self._slab_end_elapsed
+            self.last_update[self._fast_tiles] = self.elapsed
+        if self._slab_remaining == 0 and self._slow_cells.size:
+            # No message can reach these cells during this slab and even the
+            # no-drain depth bound stays below the kernel's outflow cutoff.
+            # Every cell still executes source/drain/outflow on its long clock.
+            upper = self.depth[self._slow_cells] + self.rain[self._slow_cells] * self._slab_duration
+            if np.any(upper >= WCA_MIN_FLOW_DEPTH_M):
+                raise RuntimeError("Deferred tile is no longer hydraulically isolated")
+            self._native_step(self._slow_cells, self._slow_tiles, self._slab_duration)
+            self.last_update[self._slow_tiles] = self.elapsed
+        self.last_step_seconds = dt
+        self.active_cell_count = self.tiles.cells.size
+        self.remaining = (self._slab_end_remaining if self._slab_remaining == 0
+                          else max(0.0, self.remaining - dt))
         self.time = self.interval.end - timedelta(seconds=self.remaining)
         return self.remaining == 0
 

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from contextlib import closing
 from pathlib import Path
 from threading import Condition, Lock, Thread
 from time import perf_counter
@@ -95,7 +96,7 @@ class Replay:
                     self.run_id = uuid4().hex
                     self.scenario_id = scenario.id
                     self.status = "running"
-                    self.simulated_time = utc(scenario.intervals[0].start)
+                    self.simulated_time = utc(scenario.start)
                     self.thread = Thread(target=self._worker, args=(scenario, self.run_id), daemon=True)
                     self.thread.start()
                     self.condition.wait_for(lambda: self.prepared or self.status == "error")
@@ -173,11 +174,16 @@ class Replay:
         np.save(directory / "gauge_map.npy", self.gauge_map)
         if self.grid.drain_mm_h is not None:
             np.savez_compressed(directory / "drainage.npz", rate=self.grid.drain_mm_h, source=self.grid.drain_class)
+        session = SimulationSession(
+            self.grid, self.tiles, self.engine, self.gauge_map, len(self.gauges),
+            scenario.start, self.threads, mode,
+        )
         metadata = {
             "scenario": scenario.summary(),
             "settings": self.settings,
             "status": "running",
             "mode": mode,
+            "calculation_policy": session.calculation_policy,
             "conditions": conditions,
             "reference_id": reference.name if reference else None,
             "map": self.rasters.metadata(),
@@ -190,10 +196,6 @@ class Replay:
         history.write_json(directory / "run.json", metadata)
         if mode == "streaming":
             np.save(directory / "tile_map.npy", self.tiles.by_cell.reshape(self.grid.valid.shape))
-        session = SimulationSession(
-            self.grid, self.tiles, self.engine, self.gauge_map, len(self.gauges),
-            scenario.intervals[0].start, self.threads, mode,
-        )
         with self.condition:
             self.run_id = directory.name
             self.phase = mode
@@ -204,28 +206,36 @@ class Replay:
             self.prepared = True
             self.condition.notify_all()
         calculation = storage = comparison_seconds = 0.0
-        for index, interval in enumerate(scenario.intervals):
-            if not self._checkpoint():
-                self._save_status(directory, "stopped")
-                return False
-            started = perf_counter()
-            session.set_rain(interval)
-            while not session.advance_step():
-                pass
-            latency = perf_counter() - started
-            calculation += latency
-            frame, stored, compared = self._publish(
-                directory, session, index, latency, calculation, reference,
-            )
-            storage += stored
-            comparison_seconds += compared
-            with self.condition:
-                self.frames.append(frame)
-                self.simulated_time = frame["time"]
-                self.progress = (index + 1) / len(scenario.intervals)
-            if index + 1 < len(scenario.intervals) and not self._checkpoint(self.frame_wait):
-                self._save_status(directory, "stopped")
-                return False
+        index = 0
+        with closing(scenario.iter_intervals()) as intervals:
+            for interval in intervals:
+                if not self._checkpoint():
+                    self._save_status(directory, "stopped")
+                    return False
+                started = perf_counter()
+                session.set_rain(interval)
+                while not session.advance_step():
+                    pass
+                latency = perf_counter() - started
+                calculation += latency
+                frame, stored, compared = self._publish(
+                    directory, session, index, latency, calculation, reference,
+                )
+                session.interval = None
+                del interval
+                storage += stored
+                comparison_seconds += compared
+                index += 1
+                with self.condition:
+                    self.frames.append(frame)
+                    self.simulated_time = frame["time"]
+                    self.progress = index / scenario.interval_count
+                if index < scenario.interval_count and not self._checkpoint(self.frame_wait):
+                    self._save_status(directory, "stopped")
+                    return False
+
+        if index != scenario.interval_count or session.time != scenario.end:
+            raise ValueError("강우 입력의 구간 수 또는 종료 시각이 시나리오와 다릅니다.")
 
         started = perf_counter()
         maximum = session.maximum_depth.reshape(self.grid.valid.shape)
@@ -268,6 +278,10 @@ class Replay:
         frame = {
             "id": frame_id,
             "mode": session.mode,
+            "calculation_policy": session.calculation_policy,
+            "last_step_seconds": session.last_step_seconds,
+            "tile_step_min_seconds": float(session.tile_step_seconds.min()),
+            "tile_step_max_seconds": float(session.tile_step_seconds.max()),
             "time": utc(session.time),
             "rain_observed_at": utc(session.interval.observed_at),
             "rain_interval_mm": session.interval.gauge_mm.tolist(),
@@ -296,6 +310,7 @@ class Replay:
                 "tile_modes": session.tile_modes,
                 "tile_reasons": session.tile_reasons,
                 "last_update": session.last_update.astype(np.float32),
+                "tile_step_seconds": session.tile_step_seconds.astype(np.float32),
             }
         compared = 0.0
         if reference:

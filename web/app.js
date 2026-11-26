@@ -7,7 +7,7 @@ const actionLabels = {start: "계산 시작", pause: "일시 정지", resume: "�
 const pointHint = "지도에서 지점을 선택하면 모의 수심, 배수능력, Tile 상태를 표시합니다";
 const dateFormat = new Intl.DateTimeFormat("ko-KR", {
   timeZone: "Asia/Seoul", month: "long", day: "numeric",
-  hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 });
 const scenarioOption = ({title, id}) => new Option(title.replace(/ KST$/, ""), id);
 
@@ -50,7 +50,7 @@ let historyVersion = 0;
 let regionReady = false;
 let regionVersion = 0;
 let stations = new Map();
-let showGauges = true;
+let showGauges = false;
 const drainageLabels = {facility: "서울 밖 가정 배수율 (mm/h)", uniform: "가정 배수율 (mm/h)"};
 const presets = {
   seoul: selectedBounds,
@@ -99,6 +99,7 @@ async function previewRegion(fit=true) {
     el("scenario").replaceChildren(...catalog.map(scenarioOption));
     if (catalog.some(item => item.id === previousScenario)) el("scenario").value = previousScenario;
     regionReady = true;
+    el("workspace-alert").hidden = true;
     el("region-info").textContent = `셀 ${data.map.valid_cell_count.toLocaleString("ko-KR")}개\n메모리 약 ${data.estimated_memory_mb} MB${data.warning ? "\n"+data.warning : ""}`;
     if (!archivedRun && !replayState.run_id) {
       metadata = {...metadata, ...data.map};
@@ -112,6 +113,8 @@ async function previewRegion(fit=true) {
   } catch(error) {
     if (version === regionVersion) {
       el("region-info").textContent = error.message;
+      el("workspace-error").textContent = "새 계산의 입력 자료를 확인하지 못했습니다. " + error.message;
+      el("workspace-alert").hidden = false;
       el("scenario").replaceChildren();
     }
   } finally { if (version === regionVersion) renderState(replayState); }
@@ -128,7 +131,7 @@ async function refreshHistory() {
   const previous = el("history").value;
   const runs = await api("/api/runs");
   el("history").replaceChildren(new Option(runs.length ? "기록 선택" : "저장된 실행 없음", ""), ...runs.map(run=>new Option(
-    `${areaName(run.map.bounds)} / ${run.reference_id ? "비교" : (run.mode ?? "이전 기록")} / ${run.frame_count}개 (${run.id.slice(0,6)}) / ${run.scenario.title} / ${drainageName(run)}`,run.id)));
+    `${areaName(run.map.bounds)} / ${run.reference_id ? "비교" : (run.mode ?? "이전 기록")} (${run.id.slice(0,6)})`,run.id)));
   el("history").value = previous;
   el("open-run").disabled = !el("history").value;
   el("reuse").disabled = !archivedRun || archivedRun.id !== el("history").value;
@@ -162,7 +165,7 @@ async function openHistory(focus = true) {
     const historyStatus = {completed:"완료",stopped:"중단",interrupted:"서버 종료로 중단",running:"계산 중",paused:"일시 정지",error:"오류",archived:"이전 기록"}[run.status] || run.status;
     el("history-info").textContent = `저장된 시각 ${run.frames.length}개 (${historyStatus})`;
     el("history-info").hidden = false;
-    if (focus) el("frame-label").focus();
+    if (focus) { closePanel(false); el("frame-label").focus(); }
   } catch(error) { if (version === historyVersion) notice(error.message); }
 }
 
@@ -174,7 +177,7 @@ async function api(path, settings) {
   const response = await fetch(path, settings);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(typeof body.detail === "string" ? body.detail : "요청에 실패했습니다. 입력값을 확인하고 다시 시도하세요.");
+    throw new Error(typeof body.detail === "string" ? body.detail : `요청을 처리하지 못했습니다 (HTTP ${response.status}).`);
   }
   return response.json();
 }
@@ -190,7 +193,7 @@ function post(path, body) {
 function notice(message) {
   el("notice").hidden = !message;
   el("notice").textContent = message || "";
-  if (message) el("setup-title").parentElement.open = true;
+  if (message) openPanel("setup-panel", false);
 }
 
 function mapMessage(message) {
@@ -199,6 +202,7 @@ function mapMessage(message) {
 }
 
 function setAreaSelection(enabled, keepBounds = false) {
+  if (enabled) closePanel(false);
   selecting = enabled;
   firstCorner = undefined;
   if (!enabled && !keepBounds) {
@@ -222,10 +226,12 @@ function renderState(state) {
   status.dataset.status = state.status;
   el("computed-time").textContent = formatTime(state.simulated_time_utc);
   const operation = {running: "pause", paused: "resume"}[state.status] || "start";
+  document.querySelector('[data-panel="setup-panel"]').textContent = active ? "실행 제어" : "새 계산";
   const primary = el("primary");
   primary.dataset.operation = operation;
   primary.textContent = actionLabels[operation];
   primary.disabled = busy || !health?.replay_ready || (operation === "start" && (!regionReady || selecting || !catalog.length));
+  document.querySelector(".run-progress").hidden = !state.run_id;
   el("progress").value = state.progress || 0;
   el("progress-label").textContent = `${Math.round((state.progress || 0)*100)}%`;
   for (const id of ["area","drain","drainage","threads","boundary","mode"]) {
@@ -239,6 +245,8 @@ function renderState(state) {
 }
 
 function renderFrameDetails(frame) {
+  el("streaming-title").querySelector("small").textContent = frame && !hasPeriods(frame)
+    ? "선택적 갱신 (이전 방식)" : "지역별 계산";
   el("frame-time").textContent = frame ? formatTime(frame.time) : "저장된 결과 없음";
   el("depth").textContent = frame ? `${frame.max_depth_m.toFixed(3)} m` : "—";
   el("rain").textContent = frame ? `${frame.rain_max_mm.toFixed(1)} mm` : "—";
@@ -264,6 +272,7 @@ function removeFrame() {
   el("streaming-empty").hidden = false;
   renderFrameDetails(null);
   el("point").textContent = pointHint;
+  if (!el("point-panel").hidden) closePanel(false);
   renderCharts();
   updateGauges();
 }
@@ -303,6 +312,8 @@ function updateTimeline() {
 const num = (value, digits = 1) => Number(value).toLocaleString("ko-KR", {maximumFractionDigits: digits});
 const percent = (value) => value == null ? "미측정" : num(value * 100) + "%";
 const modeName = (mode) => mode === "reference" ? "Reference" : "Streaming";
+const hasPeriods = (frame) => ["subthreshold_tile_temporal_blocking", "dry_tile_temporal_blocking", "full_grid_synchronous"]
+  .includes(frame?.calculation_policy);
 const readyMaps = () => [mapReady && map, referenceReady && referenceMap].filter(Boolean);
 const timelineFrames = () => referenceFrames.length > frames.length ? referenceFrames : frames;
 
@@ -342,10 +353,12 @@ async function decodeImage(url) {
 
 function choosePoint(point, Marker) {
   selectedPoint = point;
+  el("point-reading").textContent = "지점 정보를 확인하는 중";
   marker ??= new Marker({color:"#1b64b5",scale:.65});
   referenceMarker ??= new Marker({color:"#1b64b5",scale:.65});
   marker.setLngLat(point).addTo(map);
   referenceMarker.setLngLat(point).addTo(referenceMap);
+  openPanel("point-panel", false);
   void showPoint(point);
 }
 
@@ -379,13 +392,17 @@ function addKey(target, label, color) {
   target.append(item);
 }
 
-function renderLayerLegend() {
+function renderLayerLegend(frame = shownFrame) {
   const key = el("layer-key");
   key.hidden = layer === "depth" || layer === "drainage";
   key.replaceChildren();
   renderScale();
+  const periods = !frame || hasPeriods(frame);
+  document.querySelector('[data-layer="active"]').textContent = periods ? "계산 간격" : "활성 Tile";
   const entries = {
-    active: [["Dry","#8c9ba8"],["Low Risk","#f6c24a"],["Halo","#e06624"],["High Risk","#b43626"]],
+    active: periods
+      ? [["마지막 간격 ≤15초","#1e89d2"],["15초 초과 ~ 30초","#f6c24a"],["30초 초과","#e06624"]]
+      : [["Dry","#8c9ba8"],["Low Risk","#f6c24a"],["Halo","#e06624"],["High Risk","#b43626"],["전체 격자 계산","#1e89d2"]],
     difference: [["−5cm 이하","#164fb1"],["−5cm ~ −1mm","#55a4d5"],["+1mm ~ +5cm","#f49851"],["+5cm 이상","#b83a1b"]],
     observed: [["2022년 8월 8~9일 서울시 침수흔적도","#8e2366"]],
   }[layer] ?? [];
@@ -419,7 +436,7 @@ async function selectFrame(index, force = false) {
     }
     return;
   }
-  renderLayerLegend();
+  renderLayerLegend(shown);
   if (!mapReady) {
     renderFrameDetails(shown);
     return;
@@ -427,8 +444,11 @@ async function selectFrame(index, force = false) {
   const version = ++viewVersion;
   pendingFrame = key;
   try {
-    const refUrl = ref && "/api/frames/" + ref.id + ".png";
-    const suffix = layer === "active" || layer === "difference" ? "?layer=" + layer : "";
+    const periodLayer = layer === "active" && hasPeriods(shown);
+    const refUrl = ref && (!periodLayer || hasPeriods(ref)) &&
+      "/api/frames/" + ref.id + ".png" + (periodLayer ? "?layer=period" : "");
+    const suffix = periodLayer ? "?layer=period" :
+      layer === "active" || layer === "difference" ? "?layer=" + layer : "";
     const streamUrl = stream && (layer !== "difference" || stream.reference_frame_id) &&
       (layer !== "active" || stream.mode === "streaming") && "/api/frames/" + stream.id + ".png" + suffix;
     const observation = layer === "observed";
@@ -472,7 +492,8 @@ async function selectFrame(index, force = false) {
     }
     el("reference-empty").hidden = Boolean(refImage) || observation;
     el("streaming-empty").hidden = Boolean(streamImage) || observation;
-    el("reference-empty").textContent = "이 시각에 Reference 결과가 없습니다";
+    el("reference-empty").textContent = periodLayer && ref && !hasPeriods(ref)
+      ? "이 Reference에는 계산 간격 기록이 없습니다" : "이 시각에 Reference 결과가 없습니다";
     el("streaming-empty").textContent = stream && layer === "difference" ? "같은 시각의 Reference 결과가 필요합니다" :
       "이 시각에 Streaming 결과가 없습니다";
     shownFrame = shown;
@@ -492,7 +513,7 @@ async function selectFrame(index, force = false) {
 function renderWindows(frame, indices) {
   const target = el("window-series");
   target.replaceChildren();
-  el("window-note").hidden = !indices?.length;
+  el("window-note").hidden = Boolean(indices?.length);
   if (!indices?.length) return;
   const source = frames.filter(item => item.mode === "streaming");
   const series = [
@@ -516,10 +537,10 @@ function renderWindows(frame, indices) {
   };
   for (const v of [0,maximum/2,maximum]) {
     element("line",{x1:30,x2:355,y1:y(v),y2:y(v),stroke:"#d8e2e8"});
-    element("text",{x:0,y:y(v)+4,fill:"#526672","font-size":9},num(v));
+    element("text",{x:0,y:y(v)+4,fill:"#526672","font-size":13},num(v));
   }
-  element("text",{x:30,y:107,fill:"#526672","font-size":8},formatTime(source[0]?.time));
-  element("text",{x:355,y:107,fill:"#526672","font-size":8,"text-anchor":"end"},formatTime(source.at(-1)?.time));
+  element("text",{x:30,y:107,fill:"#526672","font-size":13},formatTime(source[0]?.time));
+  element("text",{x:355,y:107,fill:"#526672","font-size":13,"text-anchor":"end"},formatTime(source.at(-1)?.time));
   const i = source.findIndex(item => item.id === frame.id);
   if (i >= 0) element("line",{x1:x(i),x2:x(i),y1:10,y2:91,stroke:"#82909e","stroke-dasharray":"3 3"});
   const legend = document.createElement("div");
@@ -544,30 +565,39 @@ async function showPoint(point, frame = shownFrame) {
     ({assumed: "가정값", sewer: "시설 제원 추정값", pump: "시설 제원 추정값"}[drainInfo.drain_source] ?? "") +
     "\n근거: " + drainInfo.basis : "";
   if (!frame) {
+    el("point-reading").textContent = drainInfo ? `배수능력 ${num(drainInfo.drain_mm_h)} mm/h · 계산 전` : drainError;
     el("point").textContent = drainInfo ? drain.trimStart() + "\n계산 결과를 저장하면 이 지점의 모의 수심도 표시합니다." : drainError;
     return;
   }
   try {
     const result = await api("/api/frames/" + frame.id + "/point?" + search);
     if (version !== pointVersion) return;
-    const mode = ["Dry","Low Risk","Halo","High Risk"][result.tile_mode];
-    if (mode) {
+    el("point-reading").textContent = `${modeName(frame.mode)} 모의 수심 ${num(result.depth_m*1000, 1)} mm` + (result.reference_depth_m == null ? "" : ` / Reference ${num(result.reference_depth_m*1000, 1)} mm`) + (drainInfo ? `\n배수능력 ${num(drainInfo.drain_mm_h)} mm/h (추정·가정값)` : "");
+    const mode = ["Dry","Low Risk","Halo","High Risk","전체 격자 계산"][result.tile_mode];
+    if (mode || hasPeriods(result)) {
       const reasons = ["10분 강우","60분 누적","감쇠 점수","잔류 수심","고위험 Tile 인접","이전 단계 유입","이번 10분 구간에 이미 활성"]
         .filter((_,bit) => result.reasons & (1 << bit));
       const start = Date.parse(currentRun?.scenario.start);
       const last = result.last_update_seconds < 0 || !Number.isFinite(start) ? "기록 없음" :
         formatTime(start + result.last_update_seconds * 1000);
       const ref = result.reference_depth_m;
+      const calculation = hasPeriods(result)
+        ? " · 전체 격자 계산\n" + (result.calculation_policy === "full_grid_synchronous" ? "동기 계산" : "지역별 적응형 계산") +
+          " · 이 Tile의 마지막 간격 " + (result.tile_step_seconds == null ? "기록 없음" : num(result.tile_step_seconds, 2) + "초") +
+          " · 계산 시각 " + formatTime(result.time)
+        : " · " + mode + " · " +
+          (result.active ? "수평 유동 계산" : (mode === "Dry" ? "건조 상태" : "강우·배수만 계산")) +
+          "\n선택 조건 " + (reasons.join(", ") || "활성 기준 미달") + " · 마지막 수평 유동 " + last;
       el("point").textContent =
-        "Tile " + result.tile_id + " · " + mode + " · " +
-        (result.active ? "수평 유동 계산" : (mode === "Dry" ? "건조 상태" : "강우·배수만 계산")) +
-        "\n선택 조건 " + (reasons.join(", ") || "활성 기준 미달") + " · 마지막 수평 유동 " + last +
+        "Tile " + result.tile_id + calculation +
+        (result.rain_interval_mm == null ? "" :
         "\n관측소별 최댓값  10분 " + num(result.rain_interval_mm) + " mm / 60분 " + num(result.sliding_mm) +
-        " mm / 감쇠 " + num(result.decaying_mm) + " mm" +
-        "\nReference " + (ref == null ? "자료 없음" : num(ref*1000,2) + " mm") +
-        " / Streaming " + num(result.depth_m*1000,2) + " mm" +
-        (ref == null ? "" : " / 차이 " + num(result.difference_m*1000,2) + " mm") +
-        " · Tile 최대 " + num(result.max_tile_depth_m*1000,2) + " mm" + drain;
+        " mm / 감쇠 " + num(result.decaying_mm) + " mm") +
+        (frame.mode === "reference" ? "\nReference " + num(result.depth_m*1000,2) + " mm" :
+          "\nReference " + (ref == null ? "자료 없음" : num(ref*1000,2) + " mm") +
+          " / Streaming " + num(result.depth_m*1000,2) + " mm" +
+          (ref == null ? "" : " / 차이 " + num(result.difference_m*1000,2) + " mm")) +
+        (result.max_tile_depth_m == null ? "" : " · Tile 최대 " + num(result.max_tile_depth_m*1000,2) + " mm") + drain;
       renderWindows(frame,result.gauge_indices);
     } else {
       el("point").textContent = "Tile " + result.tile_id + " · " + modeName(frame.mode) +
@@ -576,6 +606,7 @@ async function showPoint(point, frame = shownFrame) {
     }
   } catch (error) {
     if (version === pointVersion) {
+      el("point-reading").textContent = "지점 정보를 불러오지 못했습니다.";
       el("point").textContent = error.message;
       renderWindows(frame);
     }
@@ -731,7 +762,7 @@ function renderScale() {
   const drainage = layer === "drainage";
   const bins = drainage ? (metadata.drainage_legend ?? []).map(bin => ({min: bin.min_mm_h, rgb: bin.rgb}))
     : metadata.legend.map(bin => ({min: bin.min_m, rgb: bin.rgb}));
-  el("legend-title").textContent = drainage ? "유효 배수능력 (mm/h)" : "모의 수심 (m)";
+  el("legend-title").textContent = drainage ? "유효 배수능력 (mm/h)" : "모의 수심 (cm)";
   el("legend-note").textContent = drainage ? "시설 제원 기반 추정값, 회색은 가정값" : "1 mm 미만은 투명";
   el("legend").closest(".depth-key").hidden = layer === "active" || layer === "difference";
   el("legend").replaceChildren();
@@ -741,7 +772,8 @@ function renderScale() {
     const next = bins[i + 1];
     segment.className = "legend-bin";
     swatch.style.backgroundColor = `rgb(${bin.rgb.join(",")})`;
-    segment.append(swatch, next ? `${bin.min}–${next.min}` : `${bin.min} 이상`);
+    const label = value => drainage ? String(value) : num(value * 100, 1);
+    segment.append(swatch, next ? `${label(bin.min)}–${label(next.min)}` : `${label(bin.min)} 이상`);
     el("legend").append(segment);
   });
 }
@@ -825,10 +857,10 @@ function renderSeries() {
   const svg = chartFrame(`시각별 최대 강우 ${num(rainMax)} mm, 최대 모의 수심 ${num(depthMax, 2)} m`, 116);
   for (const v of [0, rainMax / 2, rainMax]) {
     svgElement(svg, "line", {x1: left, x2: right, y1: yRain(v), y2: yRain(v), stroke: "#e3ecf3"});
-    svgElement(svg, "text", {x: left - 4, y: yRain(v) + 3, fill: "#526672", "font-size": 8, "text-anchor": "end"}, num(v));
+    svgElement(svg, "text", {x: left - 4, y: yRain(v) + 3, fill: "#526672", "font-size": 14, "text-anchor": "end"}, num(v));
   }
   for (const v of [depthMax / 2, depthMax]) {
-    svgElement(svg, "text", {x: right + 4, y: yDepth(v) + 3, fill: "#1b64b5", "font-size": 8}, num(v, 2));
+    svgElement(svg, "text", {x: right + 4, y: yDepth(v) + 3, fill: "#1b64b5", "font-size": 14}, num(v, 2));
   }
   const width = Math.max(.6, (right - left) / n - .6);
   timeline.forEach((item, i) => {
@@ -842,8 +874,8 @@ function renderSeries() {
     if (points) svgElement(svg, "polyline", {points, fill: "none", stroke: color, "stroke-width": 1.8, "stroke-dasharray": dash});
   }
   cursor(svg, x, top, bottom);
-  svgElement(svg, "text", {x: left, y: 110, fill: "#526672", "font-size": 8}, formatTime(timeline[0].time));
-  svgElement(svg, "text", {x: right, y: 110, fill: "#526672", "font-size": 8, "text-anchor": "end"}, formatTime(timeline.at(-1).time));
+  svgElement(svg, "text", {x: left, y: 110, fill: "#526672", "font-size": 14}, formatTime(timeline[0].time));
+  svgElement(svg, "text", {x: right, y: 110, fill: "#526672", "font-size": 14, "text-anchor": "end"}, formatTime(timeline.at(-1).time));
   const hit = svgElement(svg, "rect", {x: left, y: top - 4, width: right - left, height: bottom - top + 4, fill: "transparent", class: "series-hit"});
   hit.addEventListener("click", (event) => {
     const box = svg.getBoundingClientRect();
@@ -859,7 +891,7 @@ function renderSeries() {
   ]));
 }
 
-// Update time per 10-minute input for each mode, with the Streaming active-cell share.
+// Update time per input; archived selective runs also show the active-cell share.
 function renderLatency() {
   const target = el("latency-series");
   target.replaceChildren();
@@ -874,16 +906,16 @@ function renderLatency() {
   const y = (value) => bottom - (bottom - top) * value / maxSeconds;
   const cells = metadata?.valid_cell_count || 1;
   const svg = chartFrame(`10분 입력당 갱신 시간, 최대 ${num(maxSeconds, 2)}초`, 98);
-  const share = stream.filter(item => index.has(item.time) && item.mode === "streaming");
+  const share = stream.filter(item => index.has(item.time) && item.mode === "streaming" && !hasPeriods(item));
   if (share.length) {
     const xs = share.map(item => x(index.get(item.time)));
     const points = share.map((item, i) => [xs[i], bottom - (bottom - top) * item.active_cell_count / cells].join(","));
     svgElement(svg, "polygon", {points: [`${xs[0]},${bottom}`, ...points, `${xs.at(-1)},${bottom}`].join(" "), fill: "#f6c24a", "fill-opacity": .35});
-    svgElement(svg, "text", {x: right + 4, y: top + 3, fill: "#a6602a", "font-size": 8}, "100%");
+    svgElement(svg, "text", {x: right + 4, y: top + 3, fill: "#a6602a", "font-size": 14}, "100%");
   }
   for (const v of [0, maxSeconds / 2, maxSeconds]) {
     svgElement(svg, "line", {x1: left, x2: right, y1: y(v), y2: y(v), stroke: "#e3ecf3"});
-    svgElement(svg, "text", {x: left - 4, y: y(v) + 3, fill: "#526672", "font-size": 8, "text-anchor": "end"}, num(v, 2));
+    svgElement(svg, "text", {x: left - 4, y: y(v) + 3, fill: "#526672", "font-size": 14, "text-anchor": "end"}, num(v, 2));
   }
   for (const [series, color, dash] of [[reference, "#6a6788", "4 3"], [stream, "#1b64b5", ""]]) {
     const points = series.filter(item => index.has(item.time))
@@ -891,9 +923,9 @@ function renderLatency() {
     if (points) svgElement(svg, "polyline", {points, fill: "none", stroke: color, "stroke-width": 1.6, "stroke-dasharray": dash});
   }
   cursor(svg, x, top, bottom);
-  svgElement(svg, "text", {x: left, y: 94, fill: "#526672", "font-size": 8}, "10분 입력 하나를 반영하는 데 걸린 시간 (초)");
+  svgElement(svg, "text", {x: left, y: 94, fill: "#526672", "font-size": 14}, "10분 입력 하나를 반영하는 데 걸린 시간 (초)");
   target.append(svg, chartKey([
-    ["Streaming", "#1b64b5"], ["Reference", "#6a6788"], ["Streaming 활성 셀 비율", "#f6c24a"],
+    ["Streaming", "#1b64b5"], ["Reference", "#6a6788"], ...(share.length ? [["Streaming 활성 셀 비율", "#f6c24a"]] : []),
   ]));
 }
 
@@ -911,7 +943,7 @@ async function initMap() {
   const coverage = metadata.dem_bounds.map(([w,s,e,n])=>polygon([Math.max(w,126.7),Math.max(s,37.4),Math.min(e,127.2),Math.min(n,37.72)]));
   const createMap = (container) => new Map({
     container, bounds, fitBoundsOptions: {padding: 45},
-    pitch: 42, maxPitch: 70, maxZoom: 17, minZoom: 8, attributionControl: false,
+    pitch: 0, maxPitch: 70, maxZoom: 17, minZoom: 8, attributionControl: false,
     style: {
       version: 8,
       sources: {
@@ -930,10 +962,10 @@ async function initMap() {
         }},
       },
       layers: [
-        {id: "background", type: "background", paint: {"background-color": "#dde8e0"}},
+        {id: "background", type: "background", paint: {"background-color": "#eef1f1"}},
         {id: "streets", type: "raster", source: "osm", layout: {visibility: "none"}, paint: {"raster-opacity": .82, "raster-saturation": -.55}},
-        {id: "relief", type: "hillshade", source: "dem", paint: {"hillshade-shadow-color": "#315b57", "hillshade-highlight-color": "#fffef7", "hillshade-exaggeration": .66}},
-        {id:"coverage-outline",type:"line",source:"coverage",paint:{"line-color":"#52735f","line-width":1.5,"line-dasharray":[5,3]}},
+        {id: "relief", type: "hillshade", source: "dem", paint: {"hillshade-shadow-color": "#315b57", "hillshade-highlight-color": "#fffef7", "hillshade-exaggeration": .12}},
+        {id:"coverage-outline",type:"line",source:"coverage",layout:{visibility:"none"},paint:{"line-color":"#52735f","line-width":1.5,"line-dasharray":[5,3]}},
         {id: "domain-outline", type: "line", source: "domain", paint: {"line-color": "#244f61", "line-width": 2, "line-dasharray": [3, 2]}},
         {id:"city-outline",type:"line",source:"city",paint:{"line-color":"#683b80","line-width":1.5}},
         {id: "draft-outline", type: "line", source: "draft", paint: {"line-color": "#9c4c21", "line-width": 2, "line-dasharray": [3, 2]}},
@@ -951,7 +983,7 @@ async function initMap() {
           "circle-opacity": .9, "circle-stroke-color": "#0b4f6c", "circle-stroke-width": 1.2,
         }},
       ],
-      terrain: {source: "dem", exaggeration: 1},
+
     },
   });
   map = createMap("map");
@@ -990,7 +1022,7 @@ async function initMap() {
     mapReady = true;
     el("map-loading").hidden = true;
     updateDomain(mapBounds, true);
-    map.jumpTo({pitch: 42});
+    map.jumpTo({pitch: 0});
     for (const id of ["fit", "seoul", "pitch", "streets", "split", "gauges"]) el(id).disabled = false;
     updateGauges();
     renderState(replayState);
@@ -1001,13 +1033,6 @@ async function initMap() {
       new Marker({element: label, anchor: "bottom"}).setLngLat([127.027539, 37.497958]).addTo(map);
     }
     if (frameIndex >= 0 || layer !== "depth") void selectFrame(frameIndex, true);
-  });
-  el("split").addEventListener("click", () => {
-    const enabled = el("split").getAttribute("aria-pressed") !== "true";
-    el("split").setAttribute("aria-pressed", enabled);
-    el("map-pair").classList.toggle("single", !enabled);
-    map.resize();
-    if (enabled) referenceMap.resize();
   });
   el("gauges").addEventListener("click", () => {
     showGauges = el("gauges").getAttribute("aria-pressed") !== "true";
@@ -1038,6 +1063,7 @@ async function initMap() {
         el("area").value = "custom";
         setAreaSelection(false, true);
         void previewRegion(false);
+        openPanel("setup-panel", false);
         el("select-area").focus();
       }
       return;
@@ -1075,9 +1101,6 @@ async function init() {
 }
 
 el("primary").addEventListener("click", () => command(el("primary").dataset.operation));
-document.querySelector('a[href="#setup-title"]').addEventListener("click", () => {
-  el("setup-title").parentElement.open = true;
-});
 el("reset").addEventListener("click", () => command("reset"));
 el("drainage").addEventListener("change", () => {
   el("drain-label").textContent = drainageLabels[el("drainage").value];
@@ -1130,6 +1153,7 @@ el("select-area").addEventListener("click", () => {
 });
 el("cancel-selection").addEventListener("click", () => {
   setAreaSelection(false);
+  openPanel("setup-panel", false);
   el("select-area").focus();
 });
 el("seoul").addEventListener("click", () => map && fitRegion(presets.seoul));
@@ -1153,6 +1177,7 @@ el("live").addEventListener("click", async () => {
 el("reuse").addEventListener("click", async () => {
   if (!archivedRun) return;
   const run = archivedRun;
+  openPanel("setup-panel");
   const config = run.settings || {bounds:run.map.bounds,drain_mm_h:run.map.default_drain_mm_h,threads:run.threads_requested,boundary:run.map.boundary};
   selectedBounds=config.bounds;
   el("drain").value=config.drain_mm_h;
@@ -1175,4 +1200,64 @@ for (const button of document.querySelectorAll("[data-layer]")) {
     void selectFrame(frameIndex, true);
   });
 }
+let panelTrigger;
+const panelNames = {"setup-panel":"새 계산", "history-panel":"저장 결과", "inputs-panel":"조건과 한계", "analysis-panel":"결과 분석", "point-panel":"선택 지점", "agent-panel":"Solar에 질문"};
+function resizeMaps() {
+  map?.resize();
+  referenceMap?.resize();
+}
+function openPanel(id, focus = true) {
+  if (focus) panelTrigger = document.activeElement;
+  for (const key of Object.keys(panelNames)) {
+    el(key).hidden = key !== id;
+    if (el(key).tagName === "DETAILS") el(key).open = key === id;
+  }
+  el("panel-title").textContent = panelNames[id];
+  el("workspace-panel").hidden = false;
+  document.body.classList.add("panel-open");
+  document.querySelectorAll("[data-panel]").forEach(button => button.setAttribute("aria-expanded", String(button.dataset.panel === id)));
+  resizeMaps();
+  if (focus) el("close-panel").focus();
+}
+function closePanel(restoreFocus = true) {
+  el("workspace-panel").hidden = true;
+  document.body.classList.remove("panel-open");
+  document.querySelectorAll("[data-panel]").forEach(button => button.setAttribute("aria-expanded", "false"));
+  resizeMaps();
+  if (restoreFocus && panelTrigger?.isConnected) panelTrigger.focus();
+}
+function setCompare(enabled) {
+  el("split").setAttribute("aria-pressed", String(enabled));
+  el("map-view").setAttribute("aria-pressed", String(!enabled));
+  el("map-pair").classList.toggle("single", !enabled);
+  if (enabled) openPanel("analysis-panel");
+  else closePanel(false);
+  resizeMaps();
+  if (mapReady) fitRegion(mapBounds);
+}
+el("split").addEventListener("click", () => setCompare(true));
+el("map-view").addEventListener("click", () => setCompare(false));
+document.querySelectorAll("[data-panel]").forEach(button => button.addEventListener("click", () => {
+  if (!el("workspace-panel").hidden && !el(button.dataset.panel).hidden) closePanel();
+  else openPanel(button.dataset.panel);
+}));
+el("close-panel").addEventListener("click", () => closePanel());
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    if (selecting) { setAreaSelection(false); openPanel("setup-panel"); return; }
+    document.querySelectorAll(".map-tools").forEach(tool => tool.open = false);
+    if (!el("workspace-panel").hidden) closePanel();
+  }
+});
+document.querySelectorAll(".map-tools").forEach(tool => tool.addEventListener("toggle", () => {
+  if (tool.open) document.querySelectorAll(".map-tools").forEach(other => { if (other !== tool) other.open = false; });
+}));
+el("analysis-kind").addEventListener("change", () => {
+  const performance = el("analysis-kind").value === "performance";
+  el("rain-analysis").hidden = performance;
+  el("performance-analysis").hidden = !performance;
+  el("analysis-metrics").hidden = !performance;
+});
+el("retry-region").addEventListener("click", () => previewRegion(false));
+new ResizeObserver(resizeMaps).observe(document.querySelector(".map-area"));
 void init();

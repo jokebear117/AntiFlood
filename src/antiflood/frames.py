@@ -119,8 +119,13 @@ def array_png(values, valid, affine, layer="depth"):
         resampling=Resampling.nearest,
     )
     if layer == "active":
-        colors = [(0, 0, 0, 0), (140, 155, 168, 100), (246, 194, 74, 180), (224, 102, 36, 210), (180, 54, 38, 230)]
-        indices = np.digitize(warped, (-0.5, 0.5, 1.5, 2.5))
+        colors = [(0, 0, 0, 0), (140, 155, 168, 100), (246, 194, 74, 180), (224, 102, 36, 210), (180, 54, 38, 230), (30, 137, 210, 225)]
+        indices = np.digitize(warped, (-0.5, 0.5, 1.5, 2.5, 3.5))
+    elif layer == "period":
+        # Last executed Tile step, not a proposed period or a risk class.
+        colors = [(0, 0, 0, 0), (30, 137, 210, 225),
+                  (246, 194, 74, 180), (224, 102, 36, 210)]
+        indices = np.digitize(warped, (0, 15, 30), right=True)
     elif layer == "difference":
         colors = [(0, 0, 0, 0), (22, 79, 177, 235), (85, 164, 213, 205),
                   (0, 0, 0, 0), (244, 152, 81, 205), (184, 58, 27, 235)]

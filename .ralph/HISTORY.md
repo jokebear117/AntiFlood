@@ -88,3 +88,47 @@
 - 상태: DONE
 - 결과: A1–A7을 현재 소스·Git 이력·기존 검증 기록과 대조했고, 추가 수정이 필요한 실제 결함은 확인하지 못했어. 변경 없이 DONE 후보로 보고해.
 - 검증: 실행: node .ralph/runtime/dashboard-repro.cjs의 세 항목 모두 PASS. 서버 health 정상·ready, 저장 기록 재열기·설정 보존·PNG HTTP 200 확인. 최초 기록 조회는 PowerShell 배열 처리 오류로 실패했고 명령 수정 후 성공했어. 미실행: 전체 ralph-verify.py, 새 계산, WSL 실행기, 브라우저 렌더링. 작업 트리는 깨끗해. / 독립 컨트롤러: {"passed": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"], "run_id": "aabb5f1a9bac41a2afde85946e559ab0", "bounds": [126.999, 37.499, 127.001, 37.501], "frames": 104, "last_frame": {"frame_source": "computed", "id": "aabb5f1a9bac41a2afde85946e559ab0_00103", "time": "2022-08-08T22:30:00Z", "rain_observed_at": "2022-08-08T22:29:00Z", "rain_interval_mm": [0.0], "rain_max_mm": 0.0, "max_depth_m": 3.0034755218192317, "active_tile_count": 6, "active_cell_count": 42, "cumulative_cell_updates": 834792, "worker_count": 2, "rain_m3": 14137.199999999979, "drain_m3": 1326.0563856496883, "boundary_outflow_m3": 0.0, "water_m3": 12811.143614350316, "mass_error_m3": 2.546585164964199e-11}, "point": {"tile_id": "1999_4445", "depth_m": 0.0, "time": "2022-08-08T22:30:00Z", "active": true, "rain": [{"station_id": "2402", "name": "반포펌프장", "mm": 0.0}]}, "launcher_reused_pid": "26", "limits": "UI wiring and HTTP flow checked; no fresh browser rendering or paid Solar response asserted"}
+
+## 새 개선 명세 초기 설정 — 2026-11-25 KST
+
+사용자가 전체 격자 지속 계산과 지역별 Adaptive Time Stepping, bounded-memory 강우 처리, G01–G16 완료 조건을 지정했다. 별도 개선 방향도 전달받았고 docs/DEVELOPMENT_SPEC.md에 정리했다. 실행 지침 원문은 docs/AUTONOMOUS_DEVELOPMENT.md에 보존했다. 이전 HTML 설계에는 대체 안내를 넣었다.
+
+기존 5개 파일 변경은 사용자 로컬 커밋 승인에 따라 ralph/adaptive-time-stepping의 ac0b20d에 보존했다. 과거 GOAL/STATE/PROMPT는 runtime/pre-adaptive-*.md에 복사했다. 새 목표를 위해 STATE의 이전 DONE과 라운드 수를 초기화했다. 기본 6라운드, 900초/라운드, 5400초/실행, 최대 2회 시도를 유지하며 원격 푸시는 승인받지 않았다.
+
+읽기 전용 search-first 조사에서 기존 Tile 집계, OpenMP/WCA2D, 10분 저장과 RMSE/IoU 비교를 재사용할 수 있음을 확인했다. 전체 강우 상주는 data.load_scenarios와 Scenario.intervals에서 발생한다. 기존 유출 부피의 비례 재사용에는 안전 근거가 없다. Sliding Window는 현재 UI에 용도가 있으므로 명확히 구분해 정리한다. 현재 목표의 구현과 성능은 아직 검증하지 않았다.
+
+## 컨트롤러 라운드 1
+
+- 시작 HEAD: d159f2628e9fc4a79fba46c20ffd604a1d85a996
+- 상태: CONTINUE
+- 결과: G02·G03: 위험도 선택 분기를 제거하고 모든 유효 셀의 수평 유동을 매 단계 계산하도록 변경했어. G01: 기존 Reference 커널과 시간 간격을 보존했고 작은 격자에서 시작 HEAD와 결과가 일치했어. 계산 정책·마지막 간격 저장과 표시도 추가했어. G04–G16의 최종 검증은 남아 있으며, 특히 강우 스트리밍과 지역별 다중 주기는 미구현이야. 다음 작업은 Scenario·Replay·비교 해시의 전체 강우 보관 제거야.
+- 검증: 39셀 직렬 네이티브 시험에서 닫힌·열린 경계, 질량 보존, 비음수·유한값, 무강우 지역 유입, 강우 종료 후 이동·배수, 공통 시각을 확인했어. 최대 수량 오차 약 2.14e-14 m³, 시작 HEAD Reference 대비 수심 배열 일치. Python 구문·JS 구문·git diff --check 통과. 증거: .ralph/runtime/round1-full-grid.json, 재개 기록·명령·G별 상태: .ralph/runtime/round1-status.json. WSL은 E_ACCESSDENIED로 재시도하지 않았고, Windows Rasterio DLL 차단·libgomp 부재로 데이터 로더를 격리한 직렬 시험만 수행했어. 실데이터·OpenMP·브라우저·성능·최종 독립 검증은 미실행. 외부 확인 명령(저장소 루트): wsl -d AntiFlood-Probe -- sh -lc '~/.venvs/antiflood/bin/python scripts/check-full-grid.py'. 기존 서버·원본·저장 결과·보호 파일은 변경하지 않았어.
+
+## 컨트롤러 라운드 2
+
+- 시작 HEAD: ef021467a7f38d80768a59b5401d57cf289dd0ad
+- 상태: CONTINUE
+- 결과: G04 강우 스트리밍을 구현했어. Scenario의 전체 강우 보관을 제거하고, 시나리오 목록·Replay·비교 해시를 순차 읽기로 바꿨어. 처리한 입력 참조는 저장 후 해제하며, UI용 최근 60분 합계는 별도 복사본으로 유지해. G01–G03은 보존했고, G05의 주기 결정 활용과 G06–G07 다중 주기·경계 처리는 미완료야. G01–G16별 근거와 다음 작업은 .ralph/runtime/round2-status.json에 기록했어.
+- 검증: 실제 47개 관측소 139구간과 반포 관측소 286구간이 시작 HEAD의 강우·시각·시나리오 목록과 일치했어. 6셀·2구간 직렬 네이티브 Replay에서 Reference 일치, 질량·공통 저장 시각, 입력 참조 해제와 중단 시 reader 닫기를 확인했어. 구문 검사와 git diff --check 통과. 증거: .ralph/runtime/round2-rain-stream.json. 재현: .venv/Scripts/python.exe .ralph/runtime/round2-check.py. Rasterio 관련 코드는 격리했으며 OpenMP·실서버·브라우저·성능·최종 독립 검증은 미실행이야. WSL은 E_ACCESSDENIED로 재시도하지 않았어. 외부 확인 명령: wsl -d AntiFlood-Probe -- sh -lc '~/.venvs/antiflood/bin/python scripts/check-rain-stream.py'. 원본·기존 결과·보호 파일과 서버는 변경하지 않았어.
+
+## 컨트롤러 라운드 3
+
+- 시작 HEAD: 1ec91afc1889a69211f7b5e5c2028a06748e2694
+- 상태: CONTINUE
+- 결과: G05–G07의 첫 구현으로, 물이 도달할 수 없는 건조 Tile은 30·60초마다 계산하고 나머지는 기존 CFL 주기로 계산하도록 바꿨어. 모든 Tile을 공통 시각에 동기화하고 실제 주기를 저장해. Reference는 보존했어. G01–G09·G11·G15–G16은 추가 검증이 필요하고, G10·G12–G14는 미완료야. G별 근거와 다음 작업은 .ralph/runtime/round3-status.json에 남겼어.
+- 검증: 539셀 직렬 네이티브 시험에서 질량·비음수·유한값·경계·공통 시각과 436회의 주기 간 경계 유량 검사를 통과했어. 최대 질량 오차 2.73e-12m³, Reference 대비 최대 RMSE 0.00241m였으며 허용 기준은 확정하지 않았어. 셀 연산은 줄었지만 실행 시간 개선은 입증하지 못했어. 실제 47개 관측소 강우 3구간을 합성 격자에 적용했을 때 Reference는 시작 HEAD와 일치했고, 개선 방식의 계산량 절감은 없었어. 증거: .ralph/runtime/round3-regional.json, round3-actual-rain.json. 재현: .venv/Scripts/python.exe .ralph/runtime/round3-check.py. 구문 검사와 git diff --check 통과. WSL은 E_ACCESSDENIED, OpenMP는 libgomp 부재로 미검증이야. 다음은 준비된 WSL에서 scripts/check-regional.py 실행 후 짧은 실제 DEM 입력으로 적용 범위와 4스레드 성능을 확인하는 작업이야. 브라우저·서울 전체 비교·최종 독립 검증은 미실행이며 서버·원본·기존 결과·보호 파일은 보존했어.
+
+## 컨트롤러 라운드 4
+
+- 시작 HEAD: 99cfe91e78c4782095fea4b1ca3343c4cd302248
+- 상태: CONTINUE
+- 결과: G06–G07: 긴 계산 주기를 건조 Tile에서 유출 임계값에 도달하지 않는 얕은 물까지 확장했어. 기존 WCA2D와 Reference는 보존했고, 저장 메타데이터가 실제 계산 정책을 기록하도록 고쳤어. G01–G09·G11·G15–G16은 추가 검증, G10·G12–G14는 미완료야. G별 근거와 다음 작업은 .ralph/runtime/round4-status.json에 기록했어.
+- 검증: 직렬 네이티브 시험에서 질량·비음수·유한값·경계·공통 시각·임계값 전환을 확인했어. 최대 질량 오차 3.30e-12m³. 실제 47개 관측소 강우 3구간을 합성 격자에 적용하면 셀 연산은 64800→16200회, 최대 RMSE는 2.12e-19m였어. 격리 Replay의 저장·입력 해제·reader 닫기, Python 구문 검사와 git diff --check도 통과했어. 증거는 .ralph/runtime/round4-{regional,cutoff,actual-rain,replay}.json, 재현 명령은 round4-status.json에 있어. WSL은 E_ACCESSDENIED로 한 번 실패해 재시도하지 않았어. 실제 DEM·OpenMP·실행 시간 개선·브라우저·최종 독립 검증은 미확인이야. 다음은 저장소 루트에서 wsl -d AntiFlood-Probe -- sh -lc '~/.venvs/antiflood/bin/python scripts/check-regional.py' 실행 후 짧은 실제 DEM의 4스레드 확인이야. 서버·원본·기존 결과·보호 파일은 보존했어.
+
+## 5라운드 거절 후 외부 검토 — 2026-11-25 KST
+
+5라운드는 API·저장 조회·실제 간격 레이어 연결을 마치고 CONTINUE를 보고했으나 failure_reason에 진행을 막지 않는 WSL 제한도 적었다. 컨트롤러는 설계대로 이를 거절했고 자동 커밋과 다음 라운드는 수행하지 않았다. 원래 JSON과 controller-error.json은 보존했다. 보호 규칙·종료 판정·6라운드·900초/라운드·5400초 한도를 완화하지 않았고 새 루프도 시작하지 않았다.
+
+외부 담당 세션은 WSL의 실제 네이티브 4작업자, 작은 입력 안전성, 실제 강우 입력 일치, 서울 전역의 첫 같은 자원 비교, 실제 브라우저 제어와 저장 조회를 확인했다. 주기 지도는 실제 저장 배열을 사용했고 비교 결과의 느려짐도 표시했다. 이 과정에서 새 결과의 이전 방식 제목을 고치고 이전 기록에는 이전 방식 표시를 남겼다. 기존 baseline 검사는 15초 동기화 설정의 의미를 명확히 했으며 독립 검증기의 Git 경로와 비교 단계 실행 ID 전환을 보완했다. PROMPT와 응답 스키마 설명에 CONTINUE/DONE의 빈 failure_reason 규칙을 명시했다.
+
+결정·실측 수치·검증 범위·재현 입력은 docs/DECISIONS.md 12절에 기록했다. G별 상태와 다음 행동은 STATE에 있다. 성능 목표와 최종 오차 판단, README·아키텍처·최종 평가가 남아 있으므로 DONE과 최종 독립 합격을 선언하지 않는다. 변경은 사용자 승인 범위의 로컬 체크포인트에 보존하고 원격 푸시는 하지 않는다.

@@ -1,6 +1,25 @@
-"""Independent, bounded acceptance run against the prepared local server (WSL)."""
+"""Independent acceptance for G01–G16, after implementation and final review.
+
+Before a DONE candidate, the outer reviewer writes .ralph/runtime/final-review.json:
+{"source_sha256": {"repository/relative/path": "sha256", ...},
+ "criteria": {"G01": {"status": "VERIFIED", "evidence": ["relative/path", ...]}, ...}}
+
+source_sha256 must cover all tracked engine/, src/, web/, docs/, scripts/, README.md,
+AGENTS.md and pyproject.toml files at review time. Evidence paths must exist inside
+the repository. The review records actual small-grid physical/streaming checks,
+Seoul-wide same-resource benchmarks, browser pre-run/running/comparison screens,
+architecture review and input/result preservation. Worker assertions alone are
+not an outer review. Missing or stale review fails before any new simulation.
+
+The outer reviewer must inspect the recorded results before creating this file;
+workers leave missing review evidence as unverified, without fabricating it.
+This script additionally exercises real native compare/pause/resume/save/reopen
+paths. No acceptance tolerance for Reference RMSE/IoU is invented here.
+"""
 
 import json
+import hashlib
+import shutil
 from pathlib import Path
 import subprocess
 import time
@@ -13,6 +32,30 @@ from antiflood.history import load_depth
 
 ROOT = Path(__file__).resolve().parents[1]
 ADDRESS = "http://127.0.0.1:8000"
+CRITERIA = {f"G{i:02d}" for i in range(1, 17)}
+
+
+def final_review():
+    path = ROOT / ".ralph/runtime/final-review.json"
+    require(path.is_file(), "G01–G16 outer review is missing; implementation alone is not completion")
+    review = json.loads(path.read_text(encoding="utf8"))
+    require(set(review.get("criteria", {})) == CRITERIA, "Outer review must cover G01–G16")
+    git = shutil.which("git") or shutil.which("git.exe")
+    require(git is not None, "Git is required to verify reviewed source coverage")
+    tracked = subprocess.check_output([git, "ls-files", "-z"], cwd=ROOT).decode().split("\0")
+    sources = {name for name in tracked if name.startswith(("engine/", "src/", "web/", "docs/", "scripts/"))
+               or name in ("README.md", "AGENTS.md", "pyproject.toml")}
+    hashes = review.get("source_sha256", {})
+    require(set(hashes) == sources, "Outer review source coverage differs")
+    for name in sources:
+        require(hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == hashes[name],
+                f"Outer review is stale: {name}")
+    for name, result in review["criteria"].items():
+        require(result.get("status") == "VERIFIED" and result.get("evidence"), f"Unverified criterion: {name}")
+        for value in result["evidence"]:
+            evidence = (ROOT / value).resolve()
+            require(evidence.is_relative_to(ROOT) and evidence.is_file(), f"Missing evidence for {name}")
+    return review
 
 
 def request(path, body=None, raw=False):
@@ -28,6 +71,7 @@ def require(condition, message):
 
 
 def main():
+    review = final_review()
     health = request("/api/health")
     require(health.get("application") == "antiflood" and all(health.get(k) for k in
             ("engine_ready", "data_ready", "replay_ready", "map_ready")), "Prepared server unavailable")
@@ -38,6 +82,9 @@ def main():
     require([line for line in readme.splitlines() if line.startswith("## ")] ==
             ["## 프로젝트 주제", "## 프로젝트 동기", "## 빅데이터 알고리즘의 적용",
              "## 시스템 아키텍처", "## 리파지토리 구조"], "README sections differ")
+    topic = readme.split("## 프로젝트 주제", 1)[1].split("## 프로젝트 동기", 1)[0].strip()
+    require(topic == "대규모 시공간 강우 데이터가 지속적으로 유입되는 상황에서, 입력에 의해 변화하는 서울 전역의 침수 상태를 제한된 계산 자원으로 얼마나 빠르게 갱신 가능한가?",
+            "Fixed research question differs")
     js = request("/assets/app.js", raw=True).decode()
     html = request("/", raw=True).decode()
     require(all(f'id="{name}"' in html for name in ("area", "drain", "threads", "boundary", "reuse", "open-run"))
@@ -64,7 +111,7 @@ def main():
     owned_ids = set()
     try:
         started = request("/api/simulation/start", {**settings, "scenario_id": region["scenarios"][0]["id"],
-                                                     "mode": "streaming"})
+                                                     "mode": "compare"})
         run_id = started["run_id"]
         owned_ids.add(run_id)
         paused = request("/api/simulation/pause", {})
@@ -73,13 +120,19 @@ def main():
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             state = request("/api/simulation/state")
+            if state.get("run_id") == run_id or state.get("reference_id") == run_id:
+                owned_ids.add(state["run_id"])
             if state["status"] in ("completed", "error"):
                 break
             time.sleep(.3)
         require(state["status"] == "completed" and state["progress"] == 1 and not state["error"],
                 f"Replay did not complete: {state['status']}")
+        require(state["run_id"] in owned_ids, "Completed run does not belong to this check")
+        # Cold compare starts by publishing its Reference phase's ID.
+        run_id = state["run_id"]
         run = request(f"/api/runs/{run_id}")
         require(run["settings"] == settings and run["frames"], "Saved settings/frames differ")
+        require(run.get("reference_id"), "Reference comparison was not produced")
         frames = run["frames"]
         latest = frames[-1]
         require(latest["rain_m3"] > 0 and latest["worker_count"] == 2 and latest["cumulative_cell_updates"] > 0,
@@ -92,6 +145,11 @@ def main():
             depth = load_depth(ROOT / "outputs/frames" / run_id, stem)
             require(np.isfinite(depth).all() and depth.min() >= 0, "Invalid depth grid")
             require(abs(frame["mass_error_m3"]) <= max(1e-7, frame["rain_m3"] * 1e-10), "Mass balance failed")
+            comparison = frame.get("comparison", {})
+            require(np.isfinite(comparison.get("rmse_m", np.nan)), "Reference depth RMSE missing")
+            require(comparison.get("iou") is None or 0 <= comparison["iou"] <= 1, "Reference IoU invalid")
+            ref = request(f"/api/frames/{frame['reference_frame_id']}/point?lon=127&lat=37.5")
+            require(ref.get("time") == frame["time"], "Reference and adaptive times differ")
         request("/api/simulation/reset", {})
         require(request(f"/api/runs/{run_id}")["frames"] == frames, "Reset changed saved result")
         frame_id = latest["id"]
@@ -110,10 +168,11 @@ def main():
                 require(exc.code == 503, "Missing Solar key response differs")
             else:
                 raise RuntimeError("Missing Solar key was not rejected")
-        evidence = {"passed": [f"A{i}" for i in range(1, 8)], "run_id": run_id,
+        evidence = {"passed": sorted(CRITERIA), "run_id": run_id,
                     "bounds": settings["bounds"], "frames": len(frames), "last_frame": latest,
                     "point": point, "launcher_reused_pid": pid_before,
-                    "limits": "UI wiring and HTTP flow checked; no fresh browser rendering or paid Solar response asserted"}
+                    "reviewed_criteria": review["criteria"],
+                    "limits": "Final review evidence plus independent small real-data HTTP comparison; no paid Solar call"}
         (ROOT / ".ralph/runtime/acceptance.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf8")
         print(json.dumps(evidence, ensure_ascii=False))
     finally:
